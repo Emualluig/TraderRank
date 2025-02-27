@@ -1,1 +1,95 @@
 # TraderRank
+
+An open source stock market simulator.
+
+# Features:
+- [ ] Server:
+  - [ ] Platform Support:
+    - [ ] Desktop  
+  - [ ] Communication Interface for Client
+    - [ ] Bi-directional communication
+    - [ ] Authentication
+    - [ ] Logged-in user management (prevent double logins)
+    - [ ] Synchronize the client with the market
+    - [ ] Send updates to the client
+    - [ ] Reset the client
+  - [ ] Simulation Settings:
+    - [ ] Toggle client API order submission
+    - [ ] Toggle client API order retrival
+    - [ ] Toggle client manual order submission
+  - [ ] Market Structure:
+    - [ ] AI Agents
+      - [ ] Place limit and market orders to increase liquidity
+      - [ ] Creates the random walk of stock prices
+      - [ ] Help market follow pre-determined path if necessary
+        - We may want the stock price to move in relation to an interest rate or news events
+        - There should still be random flucuations
+    - [ ] Trader Position Limits
+        - [ ] Gross and Net
+        - [ ] Fines or unable to exceed
+      - [ ] Transaction Costs per Security:
+        - [ ] Per Share Fee
+        - [ ] Per Order Fee
+        - [ ] Rebates (different per order type)
+        - [ ] Maker-Type Fees/Rebates
+     - [ ] Close-out Prices/Fines per Security
+       - [ ] Last Transacted Close
+       - [ ] Pre-defined Close Price
+       - [ ] Close-out Fines
+    - [ ] Multi-Exchange Securities
+      - The same security is traded on two different exchanges, generally the prices move together but can flucuate
+      - Trader's position is mirrored across exchange, i.e. selling on exchange A then buying the same amount of the same security on B gives a position of 0
+      - [ ] Different Fee/Fines, Liquidity, and delayed execution between exchanges 
+  - [ ] Supported Securities:
+    - [ ] Stocks
+    - [ ] Bonds
+    - [ ] Currencies
+    - [ ] Commodities (Spot + Futures)
+    - [ ] Options  
+  - [ ] Simulation Cases: 
+- [ ] Client:
+  - [ ] Platform Support:
+    - [ ] Web 
+    - [ ] Windows
+    - [ ] MacOS
+    - [ ] Linux  
+  - [ ] Local API
+    - [ ] REST Endpoint
+      - [ ] Submit Orders (market and limit)
+      - [ ] Cancel Orders
+      - [ ] Get transactions
+      - [ ] Get current CLOB  
+    - [ ] WebSockets Endpoint (?)
+    - [ ] Excel RTD (Windows Only) (?)
+  - [ ] Windowing System
+    - [ ] Snapping to borders/other windows
+    - [ ] Save workspace to file (position of windows and user-entered configuration)
+    - [ ] Windows:
+      - [ ] CLOB Book View
+        - [ ] Hotkeys for fast order entry (market and limit orders) 
+      - [ ] CLOB Latter View
+        - [ ] Hotkeys for fast order entry (market and limit orders) 
+      - [ ] Security Charting:
+        - [ ] Candlestick View
+        - [ ] Market Bidpoint View
+        - [ ] Security Sector:
+          - [ ] Equation Editor
+        - [ ] Multiple Axis
+        - [ ] Zoom In/out
+        - [ ] Technical Indicators (With customization parameters):
+          - [ ] RSI
+          - [ ] Volume
+          - [ ] Moving Average
+          - [ ] Exponential Moving Average
+      - [ ] P&L Chart
+      - [ ] Portfolio View
+      - [ ] Transaction Log
+      - [ ] Order Entry
+      - [ ] Kill All Button (kills all open limit orders)
+      - [ ] News Viewer
+      - [ ] Integrated Terminal
+      - [ ] Tender Offer View
+        - [ ] Auction Tenders
+        - [ ] Direct Tenders 
+  
+
