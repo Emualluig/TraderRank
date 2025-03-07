@@ -43,7 +43,7 @@ def BSM_calculations(num_simulations: int, r: float, sigma: float):
     return BlackScholesFinalPrices(100.0, r, sigma, 1.0, num_simulations, np.random.default_rng())
 
 if __name__ == "__main__":
-    num_simulations = 1_000
+    num_simulations = 100
     num_workers = 8  # Adjust based on CPU cores
     final_prices_sim = run_parallel_simulations(
         num_simulations, num_workers,

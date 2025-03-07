@@ -246,11 +246,7 @@ class SimulationConst:
             top_ask_price = top_ask.price
             
         delta = self.T / self.N
-        
-        market_mid_price = (top_bid_price + top_ask_price) / 2.0
-        Z = self.rng.normal(loc=0, scale=1.0)
-        target_price: float = market_mid_price * np.exp((self.r - 0.5 * self.sigma**2) * delta + self.sigma * np.sqrt(delta) * Z)
-                    
+           
         bid_count = self.bid_count_fn(self.rng)
         bid_Z = self.rng.normal(loc=0, scale=1.0, size=bid_count)
         bid_prices = top_bid_price * np.exp((self.r - 0.5 * self.sigma**2) * delta + self.sigma * np.sqrt(delta) * bid_Z)
