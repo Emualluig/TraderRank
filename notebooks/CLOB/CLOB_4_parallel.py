@@ -1,4 +1,5 @@
-from DSA import SimulationConst, BlackScholesFinalPrices
+from Helpers.BSM import BlackScholesFinalPrices
+from Simulation import SimulationConst
 import numpy as np
 import multiprocessing as mp
 
