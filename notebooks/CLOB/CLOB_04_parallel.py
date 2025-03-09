@@ -12,8 +12,8 @@ def run_simulation(
     rng = np.random.default_rng(seed)
     N = 252
     simulation = SimulationConst(
-        r=0.05, 
-        sigma=0.2, 
+        r=0.05, # This needs to be multiplied by 40 to match mean of BSM
+        sigma=0.2, # This needs to be multiplied by 10 to match std of BSM
         T=1.0, 
         N=N, 
         removal_percentage=0.1,
@@ -44,7 +44,7 @@ def BSM_calculations(num_simulations: int, r: float, sigma: float):
     return BlackScholesFinalPrices(100.0, r, sigma, 1.0, num_simulations, np.random.default_rng())
 
 if __name__ == "__main__":
-    num_simulations = 100
+    num_simulations = 1_000
     num_workers = 8  # Adjust based on CPU cores
     final_prices_sim = run_parallel_simulations(
         num_simulations, num_workers,

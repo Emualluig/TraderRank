@@ -16,3 +16,14 @@ class Transaction:
     price: float
     quantity: float
     pass
+
+@dataclass
+class MinMax:
+    min: float
+    max: float
+    
+    def mean(self) -> float:
+        return (self.min + self.max) / 2.0
+    def average(self) -> float:
+        return self.mean()
+    pass
