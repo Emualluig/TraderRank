@@ -90,6 +90,13 @@ An open source stock market simulator.
       - [ ] Integrated Terminal
       - [ ] Tender Offer View
         - [ ] Auction Tenders
-        - [ ] Direct Tenders 
+        - [ ] Direct Tenders
+- [ ] Cases:
+  - [ ] Sales and Trader
+  - [ ] Merger and Acquisitions Arbitrage
+  - [ ] Commodities
+  - [ ] ETF Arbitrage
+  - [ ] Futures with delivery
+  - [ ] Options 
   
 
