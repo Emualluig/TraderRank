@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+</head>
+
+<body>
+  <div class="flex flex-col h-screen w-screen relative">
+    <div class="grow-0 h-8 border-b-1 z-10 flex flex-row gap-1 items-center pl-4 pr-4">
+      <button class="bg-amber-400 hover:cursor-pointer"><span>Book Window</span></button>
+      <button class="bg-blue-400 hover:cursor-pointer"><span>Chart Window</span></button>
+      <button class="bg-green-400 hover:cursor-pointer"><span>CLOB Window</span></button>
+    </div>
+    <div class="grow bg-gray-400 relative z-0 overflow-clip" id="workspace">
+
+    </div>
+    <div class="grow-0 h-8 border-b-1 z-10 flex flex-row gap-1 items-center pl-4 pr-4">
+      <button class="bg-blue-400 hover:cursor-pointer" id="add-element-button"><span>Add Element</span></button>
+      <span>Hold `SHIFT` to disable snapping</span>
+      <button class="bg-blue-400 hover:cursor-pointer" id="save-layout-button"><span>Save layout</span></button>
+      <div id="simulation-state-label"><span class="text-red-900 font-bold">CLOSED</span></div>
+    </div>
+  </div>
+  <script type="module" src="/src/main.ts"></script>
+</body>
+
+</html>

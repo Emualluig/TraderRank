@@ -2,19 +2,56 @@
 //
 
 #include <iostream>
+#include <mutex>
+#include <queue>
+
+struct Order {};
+
+class MarketSynchronization {
+
+
+
+    bool IsOrderValid(const Order& order) {
+        return true;
+    }
+
+
+    std::queue<Order>* orderQueue = new std::queue<Order>();
+    std::mutex orderQueueMutex = std::mutex();
+public:
+    void ExecuteQueue() {
+        std::queue<Order>* currentQueue = nullptr;
+        {
+            std::lock_guard lock = std::lock_guard(orderQueueMutex);
+            currentQueue = orderQueue;
+            orderQueue = new std::queue<Order>();
+        }
+        if (currentQueue == nullptr) {
+            throw std::exception("Failed getting `currentQueue`.");
+        }
+
+
+        delete currentQueue;
+    }
+
+    bool SubmitOrder(Order& order) {
+        if (!IsOrderValid(order)) {
+            return false;
+        }
+
+        {
+            std::lock_guard lock = std::lock_guard(orderQueueMutex);
+            orderQueue->push(order);
+        }
+    }
+};
+
+
+void loop_add_orders() {}
+
+void loop_market_step() {}
 
 int main()
 {
     std::cout << "Hello World!\n";
 }
-
-// Run program: Ctrl + F5 or Debug > Start Without Debugging menu
-// Debug program: F5 or Debug > Start Debugging menu
-
-// Tips for Getting Started: 
-//   1. Use the Solution Explorer window to add/manage files
-//   2. Use the Team Explorer window to connect to source control
-//   3. Use the Output window to see build output and other messages
-//   4. Use the Error List window to view errors
-//   5. Go to Project > Add New Item to create new code files, or Project > Add Existing Item to add existing code files to the project
-//   6. In the future, to open this project again, go to File > Open > Project and select the .sln file
