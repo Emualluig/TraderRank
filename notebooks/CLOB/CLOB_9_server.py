@@ -202,11 +202,15 @@ connected_clients = set()
 async def handler(websocket, path):
     # Add new client to the set
     connected_clients.add(websocket)
+    print("New client connected.")
     try:
         async for message in websocket:
             pass  # Ignore incoming messages, as we only send periodic messages
     except websockets.exceptions.ConnectionClosed:
         print("Client disconnected")
+    except Exception as e:
+        print("Fatal exception")
+        print(e)
     finally:
         # Remove client from the set when they disconnect
         connected_clients.remove(websocket)

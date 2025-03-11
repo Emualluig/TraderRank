@@ -1,6 +1,7 @@
 import interact from 'interactjs';
+import * as d3 from "d3";
 
-interface WindowElement extends HTMLDivElement {
+export interface WindowElement extends HTMLDivElement {
     workspaceX: number;
     workspaceY: number;
     dragX: number;
@@ -9,6 +10,7 @@ interface WindowElement extends HTMLDivElement {
     initialBottomY: number | null;
     minDimensions: Interact.Size | undefined;
     maxDimensions: Interact.Size | undefined;
+    frameRef: WindowFrame;
   }
 
   const doIntervalsOverlap = (start1: number, end1: number, start2: number, end2: number): boolean => {
@@ -258,7 +260,7 @@ const makeResizable = (windowElement: WindowElement, WORKSPACE: HTMLElement, WIN
     });
   };
 
-  const addWindowEventHandlers = (windowElement: WindowElement, WORKSPACE: HTMLElement, WINDOW_MAP: Map<string, WindowElement>) => {
+  const addWindowEventHandlers = (windowElement: WindowElement, WORKSPACE: HTMLElement, WINDOW_MAP: Map<string, WindowElement>, WINDOW_FRAME_MAP: Map<string, WindowFrame>) => {
     // Bring window to front when clicked
     windowElement.addEventListener("mousedown", () => {
       windowElement.style.zIndex = (highestZIndex++).toString();
@@ -268,34 +270,50 @@ const makeResizable = (windowElement: WindowElement, WORKSPACE: HTMLElement, WIN
     const closeButton = windowElement.querySelector(".close-btn") as HTMLButtonElement;
     closeButton.addEventListener("click", () => {
       WINDOW_MAP.delete(windowElement.id);
+      WINDOW_FRAME_MAP.delete(windowElement.id);
       windowElement.remove();
     });
   };
 
   let highestZIndex = 1;
 
-abstract class WindowFrame {
+export abstract class WindowFrame {
+    private readonly DEFAULT_DIMENSIONS: Interact.Size = { width: 250, height: 150 };
     private readonly _id: string;
     protected readonly element: WindowElement;
+    protected readonly content: HTMLDivElement;
 
-    protected constructor(WORKSPACE: HTMLElement, WINDOW_MAP: Map<string, WindowElement>) {
+    protected constructor(
+        WORKSPACE: HTMLElement, 
+        WINDOW_MAP: Map<string, WindowElement>, 
+        WINDOW_FRAME_MAP: Map<string, WindowFrame>,
+        dimensions: Interact.Size|null,
+        maxDimensions: Interact.Size|null,
+        minDimensions: Interact.Size|null,
+        title: string,
+    ) {
         this._id = `window_${crypto.randomUUID().slice(0, 8)}`;
         const windowElement = document.createElement("div");
         windowElement.id = this._id;
         windowElement.className = "window absolute bg-white border border-gray-700 shadow-lg";
-        windowElement.style.width = "250px"; // Default width
-        windowElement.style.height = "150px"; // Default height
+        const dim = dimensions ?? this.DEFAULT_DIMENSIONS;
+        windowElement.style.width = `${dim.width}px`;
+        windowElement.style.height = `${dim.height}px`;
         windowElement.style.zIndex = (highestZIndex++).toString();
         
         windowElement.innerHTML = `
             <div class="window-top bg-blue-500 text-white p-2 cursor-grab flex justify-between">
-            <span>Drag Me</span>
-            <button class="close-btn text-white font-bold px-2 hover:bg-red-500 hover:cursor-pointer">X</button>
+                <span>${title}</span>
+                <button class="close-btn text-white font-bold px-2 hover:bg-red-500 hover:cursor-pointer">X</button>
             </div>
-            <div class="window-content p-4">
-            New Window
-            </div>
+            <div class="window-content p-4 relative"></div>
         `;
+
+        const contentDiv = windowElement.querySelector("div.window-content");
+        if (contentDiv === null) {
+            throw new Error("Could not find content");
+        }
+        this.content = contentDiv as HTMLDivElement;
 
         const WE = windowElement as WindowElement;
         WE.workspaceX = 50;
@@ -304,34 +322,146 @@ abstract class WindowFrame {
         WE.dragY = WE.workspaceY;
         WE.initialTopY = null;
         WE.initialBottomY = null;
-        WE.minDimensions = { height: 100, width: 150 };
-        WE.maxDimensions = undefined;
+        WE.minDimensions = minDimensions ?? undefined;
+        WE.maxDimensions = maxDimensions ?? undefined;
+        WE.frameRef = this;
         this.element = WE;
 
         WE.style.transform = `translate(${WE.workspaceX}px, ${WE.workspaceY}px)`;
 
         WINDOW_MAP.set(this._id, WE);
+        WINDOW_FRAME_MAP.set(this._id, this);
         WORKSPACE.appendChild(WE);
 
         makeDraggable(WE, WORKSPACE, WINDOW_MAP);
         makeResizable(WE, WORKSPACE, WINDOW_MAP);
-        addWindowEventHandlers(WE, WORKSPACE, WINDOW_MAP);
+        addWindowEventHandlers(WE, WORKSPACE, WINDOW_MAP, WINDOW_FRAME_MAP);
     }
 
-    public abstract Notify(): void;
+    public abstract Notify(obj: any): void;
 
     public get id(): string {
         return this._id;
     };
 }
 
-class WindowDEV extends WindowFrame {
-    public constructor(WORKSPACE: HTMLElement, WINDOW_MAP: Map<string, WindowElement>) {
-        super(WORKSPACE, WINDOW_MAP);
+export class WindowDEV extends WindowFrame {
+    public constructor(
+        WORKSPACE: HTMLElement, 
+        WINDOW_MAP: Map<string, WindowElement>,
+        WINDOW_FRAME_MAP: Map<string, WindowFrame>
+    ) {
+        super(
+            WORKSPACE, 
+            WINDOW_MAP, 
+            WINDOW_FRAME_MAP, null, null, { height: 100, width: 150 },
+            "Drag Me"
+        );
+        this.content.innerText = "New Window";
     }   
-    public Notify(): void {
-        throw new Error('Method not implemented.');
-    }
+    public Notify(obj: any): void {}
 }
 
-export default WindowFrame;
+interface Transaction {
+    price: number;
+    quantity: number;
+}
+
+type Depth = Record<string, number>;
+interface SimulationStep {
+    depths: [Depth, Depth];
+    top_ask: number;
+    top_bid: number;
+    transactions: Transaction[];
+}
+
+export class WindowClob extends WindowFrame {
+    private readonly orderbookId = `orderbook-${this.id}`;
+    private readonly graphHeight = 400;
+    private readonly graphWidth = 400;
+    private readonly graphMargins = { top: 20, right: 20, bottom: 20, left: 20 };
+    public constructor(
+        WORKSPACE: HTMLElement, 
+        WINDOW_MAP: Map<string, WindowElement>,
+        WINDOW_FRAME_MAP: Map<string, WindowFrame>
+    ) {
+        super(
+            WORKSPACE, 
+            WINDOW_MAP, 
+            WINDOW_FRAME_MAP, { width: 500, height: 500 }, null, { width: 500, height: 500 },
+            "CLOB Depth View"
+        );
+        this.content.innerHTML = `<div id="${this.orderbookId}"></div>`;
+    }   
+    public Notify(obj: any): void {
+        const timestamp = obj[0];
+        const simulationStep = obj[1] as SimulationStep;
+
+        const toMap = (depth: Depth): Map<number, number> => {
+            const retval = new Map<number, number>();
+            for (const [k, v] of Object.entries(depth)) {
+                retval.set(parseFloat(k), v);
+            }
+            return retval;
+        }
+
+        const bidDepth = toMap(simulationStep.depths[0]);
+        const askDepth = toMap(simulationStep.depths[1]);
+
+        // Convert Depth Map to sorted arrays
+        const bidData = Array.from(bidDepth.entries()).sort((a, b) => a[0] - b[0]);
+        const askData = Array.from(askDepth.entries()).sort((a, b) => a[0] - b[0]);
+
+        // Scales
+        const xScale = d3.scaleLinear()
+            .domain([
+                Math.min(...bidData.map(d => d[0]), ...askData.map(d => d[0])),
+                Math.max(...bidData.map(d => d[0]), ...askData.map(d => d[0]))
+            ])
+            .range([0, this.graphWidth]);
+
+        const yScale = d3.scaleLinear()
+            .domain([0, d3.max([...bidData, ...askData], d => d[1]) || 1])
+            .range([this.graphHeight, 0]);
+
+        // Area Generators
+        const bidArea = d3.area<[number, number]>()
+            .x(d => xScale(d[0]))
+            .y0(this.graphHeight)
+            .y1(d => yScale(d[1]));
+
+        const askArea = d3.area<[number, number]>()
+            .x(d => xScale(d[0]))
+            .y0(this.graphHeight)
+            .y1(d => yScale(d[1]));
+
+        // Draw Bid Depth
+        this.svg.selectAll(".bid-area").remove();
+        this.svg.append("path")
+            .datum(bidData)
+            .attr("class", "bid-area")
+            .attr("fill", "green")
+            .attr("opacity", 0.5)
+            .attr("d", bidArea);
+
+        // Draw Ask Depth
+        this.svg.selectAll(".ask-area").remove();
+        this.svg.append("path")
+            .datum(askData)
+            .attr("class", "ask-area")
+            .attr("fill", "red")
+            .attr("opacity", 0.5)
+            .attr("d", askArea);
+
+        // Update Axes
+        this.svg.selectAll(".axis").remove();
+        this.svg.append("g")
+            .attr("class", "axis")
+            .attr("transform", `translate(0,${this.graphHeight})`)
+            .call(d3.axisBottom(xScale));
+
+        this.svg.append("g")
+            .attr("class", "axis")
+            .call(d3.axisLeft(yScale));
+    }
+}
