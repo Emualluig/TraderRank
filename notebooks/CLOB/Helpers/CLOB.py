@@ -63,6 +63,18 @@ class CLOB:
         if length == 0:
             return None
         return self._ask_queue.peekitem(0)[1]
+    
+    def get_bid_book(self) -> List[LimitOrder]:
+        retval: List[LimitOrder] = []
+        for w in self._bid_queue.values():
+            retval.append(w)
+        return retval
+    
+    def get_ask_book(self) -> List[LimitOrder]:
+        retval: List[LimitOrder] = []
+        for w in self._ask_queue.values():
+            retval.append(w)
+        return retval
         
     def process_transactions(self):
         transactions: List[Transaction] = []

@@ -5,6 +5,7 @@ import { PanelText } from './Panels/PanelText';
 import { MarketState, convertToSimulationStep } from './MarketHelpers';
 import { PanelChart } from './Panels/PanelChart';
 import { PanelCLOB } from './Panels/PanelCLOB';
+import { PanelBook } from './Panels/PanelBook';
 
 const WORKSPACE = document.getElementById("workspace");
 if (!WORKSPACE) {
@@ -30,6 +31,10 @@ let MARKET_STATE: MarketState = {
     asks: new Map(),
     bids: new Map()
   },
+  currentBooks: {
+    asks: [],
+    bids: [],
+  },
   top_ask: NaN,
   top_bid: NaN
 };
@@ -45,6 +50,10 @@ WS.onmessage = (event) => {
         midpointHistory: [{timestamp: step.timestamp, price: (step.top_ask + step.top_bid) / 2}],
         top_ask: step.top_ask,
         top_bid: step.top_bid,
+        currentBooks: {
+          bids: step.bid_book,
+          asks: step.ask_book
+        }
       };
     } else {
       MARKET_STATE.timestamp = step.timestamp;
@@ -53,6 +62,10 @@ WS.onmessage = (event) => {
       MARKET_STATE.currentDepths = step.depths;
       MARKET_STATE.top_ask = step.top_ask;
       MARKET_STATE.top_bid = step.top_bid;
+      MARKET_STATE.currentBooks = {
+        bids: step.bid_book,
+        asks: step.ask_book,
+      };
     }
   } catch (err) {
     console.log("Failed decoding WS data to JSON.");
@@ -81,7 +94,7 @@ if (!ADD_BOOK_BUTTON) {
   throw new Error("Invariant: Couldn't find add book button.");
 }
 ADD_BOOK_BUTTON.addEventListener("click", () => {
-  console.log("NOT IMPLEMENTED");
+  const _ = new PanelBook(PANEL_MANAGER);
 });
 
 const ADD_CHART_BUTTON = document.getElementById("add-panel-chart")

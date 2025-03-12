@@ -1,13 +1,23 @@
-from dataclasses import asdict, is_dataclass
+from dataclasses import asdict, dataclass, is_dataclass
 from typing import Any, List
 import numpy as np
 import numpy.typing as npt
-from Helpers.Classes import LimitOrder, MinMax
+from Helpers.Classes import LimitOrder, MinMax, Transaction
 from Helpers.CLOB import CLOB
-from Helpers.SimulationAbstract import Simulation, SimulationStep
+from Helpers.SimulationAbstract import Simulation
 import asyncio
 import websockets
 import json
+
+@dataclass
+class SimulationStep:
+    transactions: List[Transaction]
+    depths: tuple[dict[float, float], dict[float, float]]
+    top_bid: float
+    top_ask: float
+    bid_book: List[LimitOrder]
+    ask_book: List[LimitOrder]
+    pass
 
 class OrderSDE_V1():
     _rng: np.random.Generator
@@ -193,27 +203,11 @@ class SimulationOrderSDE_V1(Simulation):
             transactions=transactions,
             depths=depths,
             top_bid=top_bid_price,
-            top_ask=top_ask_price
+            top_ask=top_ask_price,
+            bid_book=self.clob.get_bid_book(),
+            ask_book=self.clob.get_ask_book()
         )]
     pass
-
-connected_clients = set()
-
-async def handler(websocket, path):
-    # Add new client to the set
-    connected_clients.add(websocket)
-    print("New client connected.")
-    try:
-        async for message in websocket:
-            pass  # Ignore incoming messages, as we only send periodic messages
-    except websockets.exceptions.ConnectionClosed:
-        print("Client disconnected")
-    except Exception as e:
-        print("Fatal exception")
-        print(e)
-    finally:
-        # Remove client from the set when they disconnect
-        connected_clients.remove(websocket)
 
 def convert_to_serializable(obj: Any):
     """Recursively converts dataclasses to dicts and ensures all numbers are floats."""
@@ -233,36 +227,89 @@ def convert_to_serializable(obj: Any):
 def create_simulation(rng: np.random.Generator):
     return SimulationOrderSDE_V1(
         T=1.0, 
-        N=252, 
+        N=1000, 
         order_model=OrderSDE_V1(rng),
         removal_percentage=0.1,
         rng=rng,
     )
 
-async def broadcast_messages():
+# Store all connected client connections
+connected_clients = set()
+
+async def broadcast(message: str):
+    """
+    Broadcast a message to all connected clients.
+    """
+    if connected_clients:  # Only proceed if there is at least one client
+        # Turn each coroutine into a Task before passing it to asyncio.wait
+        tasks = [asyncio.create_task(client.send(message)) for client in connected_clients]
+        await asyncio.wait(tasks)
+
+async def handle_client(websocket, path):
+    """
+    Handle a new WebSocket client connection. Keep listening for
+    messages until the client disconnects or an error occurs.
+    """
+    # Register new client connection
+    connected_clients.add(websocket)
+    print(f"Client connected. Total clients: {len(connected_clients)}")
+
+    try:
+        # Continuously listen for messages from the client
+        async for message in websocket:
+            print(f"Received from client: {message}")
+            
+            # Example echo back to the single client
+            response = f"You sent: {message}"
+            # await websocket.send(response)
+            
+            # Optionally broadcast the message to all clients
+            # await broadcast(f"Broadcasting: {message}")
+
+    except websockets.exceptions.ConnectionClosedError:
+        # Handle abrupt client disconnection
+        print("Client disconnected abruptly.")
+
+    finally:
+        # Unregister client (always do in finally to handle normal or abrupt closure)
+        connected_clients.remove(websocket)
+        print(f"Client disconnected. Total clients: {len(connected_clients)}")
+
+async def run_simulation():
     rng = np.random.default_rng()
     simulation = create_simulation(rng)
     while True:
-        if connected_clients:
-            try:
-                data = convert_to_serializable(simulation.do_simulation_step())
-            except SimulationException:
-                simulation = create_simulation(rng)
-                data = convert_to_serializable(simulation.do_simulation_step())
-                pass
-            message = json.dumps(data)
-            await asyncio.gather(*[client.send(message) for client in connected_clients])
-        await asyncio.sleep(0.1) 
+        # Generate a random price between 100 and 200, for example
+        try:
+            data = convert_to_serializable(simulation.do_simulation_step())
+        except SimulationException:
+            await asyncio.sleep(5)
+            simulation = create_simulation(rng)
+            data = convert_to_serializable(simulation.do_simulation_step())
+            pass
+        message = json.dumps(data)
+        
+        # Broadcast to all connected clients
+        await broadcast(message)
+        
+        # Sleep 100ms before the next update
+        await asyncio.sleep(0.01)
+    pass
 
-async def start_server():
-    server = await websockets.serve(handler, "localhost", 8765)
-    print("WebSocket server started on ws://localhost:8765")
-    
-    asyncio.create_task(broadcast_messages())
-    
-    await server.wait_closed()
+async def main(port: int):
+    """
+    Main entry point to start the WebSocket server.
+    """
+    # Create WebSocket server
+    async with websockets.serve(handle_client, "localhost", port):
+        print(f"WebSocket server started on ws://localhost:{port}")
+        
+        asyncio.create_task(run_simulation())
+        
+        # Keep the server running until interrupted
+        await asyncio.Future()  # Run forever
 
 if __name__ == "__main__":
-    asyncio.run(start_server())
+    asyncio.run(main(8765))
 
     pass
