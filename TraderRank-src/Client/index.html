@@ -5,17 +5,17 @@
   <meta charset="UTF-8" />
   <link rel="icon" type="image/svg+xml" href="/vite.svg" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <!-- <link rel="stylesheet" href="src/tw.css" /> -->
 </head>
 
 <body>
   <div class="flex flex-col h-screen w-screen relative">
     <div class="grow-0 h-8 border-b-1 z-10 flex flex-row gap-1 items-center pl-4 pr-4">
-      <button class="bg-amber-400 hover:cursor-pointer"><span>Book Window</span></button>
-      <button class="bg-blue-400 hover:cursor-pointer"><span>Chart Window</span></button>
-      <button class="bg-green-400 hover:cursor-pointer" id="add-window-clob"><span>CLOB Window</span></button>
+      <button class="bg-amber-400 hover:cursor-pointer" id="add-panel-book"><span>Book Panel</span></button>
+      <button class="bg-blue-400 hover:cursor-pointer" id="add-panel-chart"><span>Chart Panel</span></button>
+      <button class="bg-green-400 hover:cursor-pointer" id="add-panel-clob"><span>CLOB Panel</span></button>
     </div>
     <div class="grow bg-gray-400 relative z-0 overflow-clip" id="workspace">
-
     </div>
     <div class="grow-0 h-8 border-b-1 z-10 flex flex-row gap-1 items-center pl-4 pr-4">
       <button class="bg-blue-400 hover:cursor-pointer" id="add-element-button"><span>Add Element</span></button>
