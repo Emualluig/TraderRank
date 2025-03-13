@@ -97,6 +97,7 @@ An open source stock market simulator.
   - [ ] Commodities
   - [ ] ETF Arbitrage
   - [ ] Futures with delivery
-  - [ ] Options 
+  - [ ] Options
+  - [ ] Multi-currency arbitrage (Floyd-Warshall exchange matrix)
   
 
