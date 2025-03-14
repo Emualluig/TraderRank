@@ -1,9 +1,6 @@
 import asyncio
+from dataclasses import dataclass
 import websockets
-
-
-
-
 
 # Store all connected client connections
 connected_clients = set()

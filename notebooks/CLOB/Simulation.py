@@ -1,5 +1,6 @@
 from typing import Callable, List, Tuple
 import numpy as np
+import numpy.typing as npt
 from Helpers.Classes import LimitOrder, Transaction
 from Helpers.CLOB import CLOB
 from Helpers.SimulationAbstract import Simulation, SimulationStep
