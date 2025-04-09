@@ -13,7 +13,14 @@ message(STATUS "CMAKE_PREFIX_PATH: ${CMAKE_PREFIX_PATH}")
 
 find_package(magic_enum CONFIG REQUIRED)
 
+set(PYBIND11_FINDPYTHON ON)
 pybind11_add_module(Server MODULE "Server.cpp")
 
 target_link_libraries(Server PRIVATE pybind11::module)
 target_link_libraries(Server PRIVATE magic_enum::magic_enum)
+
+add_custom_command(TARGET Server POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        $<TARGET_FILE:Server>
+        "${CMAKE_SOURCE_DIR}/notebooks/python_modules/Server.pyd"
+)

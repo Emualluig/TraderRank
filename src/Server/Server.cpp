@@ -14,9 +14,3 @@ PYBIND11_MODULE(Server, m) {
     m.doc() = "Example pybind11 module";
     m.def("meaning_of_life", &meaning_of_life, "Returns the meaning of life.");
 }
-
-//int main()
-//{
-//	std::cout << "Hello CMake." << std::endl;
-//	return 0;
-//}
