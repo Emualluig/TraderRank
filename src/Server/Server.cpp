@@ -19,6 +19,7 @@
 #include <nlohmann/json.hpp>
 
 #include <pybind11/pybind11.h>
+#include <pybind11/stl.h>
 #include <pybind11/stl_bind.h>
 
 namespace py = pybind11;
@@ -354,13 +355,13 @@ namespace Server {
         uint32_t current_step = 0;
         const std::map<SecurityTicker, std::shared_ptr<ISecurity>> ticker_to_security;
         UserPortfolioTable user_table;
-        std::map<SecurityID, SecurityTicker> id_to_ticker;
-        std::map<SecurityID, std::shared_ptr<ISecurity>> id_to_security;
-        std::vector<std::shared_ptr<ISecurity>> securities;
-        std::vector<SecurityID> security_ids;
-        std::vector<SecurityTicker> security_tickers;
-        std::vector<bool> security_tradability;
-        std::vector<OrderBook> order_books;
+        std::map<SecurityID, SecurityTicker> id_to_ticker = {};
+        std::map<SecurityID, std::shared_ptr<ISecurity>> id_to_security = {};
+        std::vector<std::shared_ptr<ISecurity>> securities = {};
+        std::vector<SecurityID> security_ids = {};
+        std::vector<SecurityTicker> security_tickers = {};
+        std::vector<bool> security_tradability = {};
+        std::vector<OrderBook> order_books = {};
     public:
         explicit Simulation(
             std::map<SecurityTicker, std::shared_ptr<ISecurity>>&& ticker_to_security,
@@ -368,7 +369,7 @@ namespace Server {
             float T
         ) : N{ N }, T{ T }, ticker_to_security{ std::move(ticker_to_security) }, user_table{ UserPortfolioTable(ticker_to_security.size()) } {
             SecurityID security_id = 0;
-            for (const auto& [ticker, security] : ticker_to_security) {
+            for (const auto& [ticker, security] : this->ticker_to_security) {
                 id_to_ticker.emplace(security_id, ticker);
                 id_to_security.emplace(security_id, security);
 
@@ -548,14 +549,12 @@ namespace Server {
 
         uint32_t N = 100;
         float T = 1.0f;
-        Server::Simulation simulation;
+        Server::Simulation simulation = Server::Simulation({
+            std::make_pair("CAD", std::make_shared<Security_CAD>(Security_CAD())),
+            std::make_pair("BOND", std::make_shared<Security_BOND>(Security_BOND()))
+        }, N, T);
     public:
-        explicit BindSimulation(Private) : simulation { 
-            Server::Simulation({
-                std::make_pair("CAD", std::make_shared<Security_CAD>(Security_CAD())),
-                std::make_pair("BOND", std::make_shared<Security_BOND>(Security_BOND()))
-            }, N, T)
-        } {
+        explicit BindSimulation(Private) {
             auto anon_user_id = simulation.add_user("ANON");
         }
 
@@ -563,7 +562,7 @@ namespace Server {
             return simulation.get_all_tickers();
         }
 
-        std::string do_simulation_step(std::shared_ptr<std::map<SecurityID, std::queue<CommandVariant>>> queues) {
+        std::string do_simulation_step(std::map<SecurityID, std::queue<CommandVariant>>& queues) {
             // Perform a simulaiton step
             auto step = simulation.get_current_step(); // step ∈ [0, ..., N] inclusive
             if (step > simulation.get_N()) {
@@ -594,7 +593,7 @@ namespace Server {
             for (auto security_id : simulation.get_security_ids()) {
                 auto& security_class = simulation.get_security(security_id);
                 auto& order_book = simulation.get_order_book(security_id);
-                auto& commands = queues->at(security_id);
+                auto& commands = queues.at(security_id);
 
                 // Keep track of market updates for a particular security
                 auto local_partially_transacted_orders = std::map<OrderID, float>();
