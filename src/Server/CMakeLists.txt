@@ -12,12 +12,16 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 message(STATUS "CMAKE_PREFIX_PATH: ${CMAKE_PREFIX_PATH}")
 
 find_package(magic_enum CONFIG REQUIRED)
+find_package(fmt CONFIG REQUIRED)
+find_package(nlohmann_json CONFIG REQUIRED)
 
 set(PYBIND11_FINDPYTHON ON)
 pybind11_add_module(Server MODULE "Server.cpp")
 
 target_link_libraries(Server PRIVATE pybind11::module)
 target_link_libraries(Server PRIVATE magic_enum::magic_enum)
+target_link_libraries(Server PRIVATE fmt::fmt)
+target_link_libraries(Server PRIVATE nlohmann_json::nlohmann_json)
 
 add_custom_command(TARGET Server POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
