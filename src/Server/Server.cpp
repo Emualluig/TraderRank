@@ -368,7 +368,7 @@ namespace Server {
             std::map<SecurityTicker, std::shared_ptr<ISecurity>>&& ticker_to_security,
             uint32_t N,
             float T
-        ) : N{ N }, T{ T }, ticker_to_security{ std::move(ticker_to_security) }, user_table{ UserPortfolioTable(ticker_to_security.size()) } {
+        ) : N{ N }, T{ T }, ticker_to_security{ std::move(ticker_to_security) }, user_table{ UserPortfolioTable(this->ticker_to_security.size()) } {
             SecurityID security_id = 0;
             for (const auto& [ticker, security] : this->ticker_to_security) {
                 id_to_ticker.emplace(security_id, ticker);
@@ -545,6 +545,52 @@ namespace Server {
         }      
     };
 
+    class Security_STOCK : public Server::ISecurity {
+        // Inherited via ISecurity
+        bool is_tradeable() override
+        {
+            return true;
+        }
+        void before_step(Simulation& simulation) override {}
+        void after_step(Simulation& simulation) override {}
+        void on_simulation_start(Simulation& simulation) override {}
+        void on_simulation_end(Simulation& simulation) override {
+            // At the end convert to CAD at midpoint price, or `100.0f
+            auto stock_id = simulation.get_security_id("STOCK");
+            auto cad_id = simulation.get_security_id("CAD");
+
+
+            auto& order_book = simulation.get_order_book(stock_id);
+            auto close_bid_price = 100.0f;
+            auto close_ask_price = 100.0f;
+            if (order_book.bid_size() > 0) {
+                close_bid_price = order_book.top_bid().price;
+            }
+            if (order_book.ask_size() > 0) {
+                close_ask_price = order_book.top_ask().price;
+            }
+
+            auto& user_table = simulation.get_user_table();
+            for (UserID index_user = 0; index_user < user_table.get_user_count(); index_user++) {
+                user_table.change_user_transfer_and_scale(
+                    index_user, stock_id, cad_id, (close_bid_price + close_ask_price) / 2.0f
+                );
+            }
+        }
+        void on_trade_executed(
+            Simulation& simulation,
+            Server::UserID buyer, Server::UserID seller, float price, float quantity
+        ) override {
+            auto stock_id = simulation.get_security_id("STOCK");
+            auto cad_id = simulation.get_security_id("CAD");
+            auto& user_table = simulation.get_user_table();
+            // The buyer gets the stock, but losses money
+            user_table.change_user_position(buyer, stock_id, quantity, cad_id, -price * quantity);
+            // The seller losses the stock, but gets money
+            user_table.change_user_position(seller, stock_id, -quantity, cad_id, price * quantity);
+        }
+    };
+
     class BindSimulation : public std::enable_shared_from_this<BindSimulation> {
         struct Private { explicit Private() = default; };
 
@@ -552,7 +598,8 @@ namespace Server {
         float T = 1.0f;
         Server::Simulation simulation = Server::Simulation({
             std::make_pair("CAD", std::make_shared<Security_CAD>(Security_CAD())),
-            std::make_pair("BOND", std::make_shared<Security_BOND>(Security_BOND()))
+            std::make_pair("BOND", std::make_shared<Security_BOND>(Security_BOND())),
+            std::make_pair("STOCK", std::make_shared<Security_STOCK>(Security_STOCK()))
         }, N, T);
     public:
         explicit BindSimulation(Private) {
@@ -561,6 +608,10 @@ namespace Server {
 
         std::vector<SecurityTicker> get_tickers() const {
             return simulation.get_all_tickers();
+        }
+
+        uint32_t get_current_step() const {
+            return simulation.get_current_step();
         }
 
         std::string do_simulation_step(std::map<SecurityID, std::queue<CommandVariant>>& queues) {
@@ -591,7 +642,12 @@ namespace Server {
             std::map<SecurityTicker, std::set<OrderID>> cancelled_orders = {};
             std::map<SecurityTicker, std::vector<Transaction>> transactions = {};
 
+            // Here would the command queues normally be
             for (auto security_id : simulation.get_security_ids()) {
+                if (queues.find(security_id) == queues.end()) {
+                    std::cout << "This security didn't have a queue! Fix this!\n";
+                    continue;
+                }
                 auto& security_class = simulation.get_security(security_id);
                 auto& order_book = simulation.get_order_book(security_id);
                 auto& commands = queues.at(security_id);
@@ -786,6 +842,7 @@ namespace nlohmann {
 }
 
 
+
 int meaning_of_life() {
     return 42;
 }
@@ -822,6 +879,7 @@ PYBIND11_MODULE(Server, m) {
         .def_static("create", &Server::BindSimulation::create)
         .def("getptr", &Server::BindSimulation::getptr)
         .def("get_tickers", &Server::BindSimulation::get_tickers)
+        .def("get_current_step", &Server::BindSimulation::get_current_step)
         .def("do_simulation_step", &Server::BindSimulation::do_simulation_step,
             py::arg("queues"));
 
