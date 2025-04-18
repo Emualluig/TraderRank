@@ -1,6 +1,6 @@
 ﻿// Server.cpp : Defines the entry point for the application.
 //
-
+#include <cstdint>
 #include <iostream>
 #include <algorithm>
 #include <shared_mutex>
@@ -14,6 +14,8 @@
 #include <unordered_map>
 #include <set>
 #include <unordered_set>
+#include <exception>
+#include <stdexcept>
 #include <fmt/color.h>
 #include <magic_enum/magic_enum.hpp>
 #include <nlohmann/json.hpp>
@@ -25,972 +27,1031 @@
 
 namespace py = pybind11;
 
-namespace Server {
-    using Username = std::string;
-    using SecurityTicker = std::string;
-    using OrderID = uint32_t;
-    using UserID = uint32_t;
-    using SecurityID = uint32_t;
-
-    class UserPortfolioTable {
-        uint32_t user_count = 0;
-        uint32_t capacity = 0;
-        const uint32_t columns;
-
-        std::unique_ptr<float[]> data = nullptr;
-        mutable std::shared_mutex data_mutex = std::shared_mutex();
-        mutable std::unique_ptr<std::mutex[]> user_mutexes;
+/*
+namespace DemoSecurities {
+    class Security_CAD : public Server::ISecurity {
     public:
-        explicit UserPortfolioTable(const uint32_t columns) : columns{ columns } {}
-
-        const uint32_t get_column_count() const {
-            return columns;
-        }
-
-        const uint32_t get_user_count() const {
-            return user_count;
-        }
-
-        UserID register_new_user() {
-            auto write_lock = std::unique_lock(data_mutex);
-            auto user_id = user_count++;
-            assert(user_count > 0);
-
-            if (user_count > capacity) {
-                capacity = std::max(1u, capacity * 2);
-
-                // Resize data buffer
-                auto new_data_ptr = std::make_unique<float[]>(capacity * columns);
-                std::fill(new_data_ptr.get(), new_data_ptr.get() + capacity * columns, 0.0f);
-
-                if (data != nullptr) {
-                    std::memcpy(new_data_ptr.get(), data.get(), (user_count - 1) * columns * sizeof(float));
-                }
-                data = std::move(new_data_ptr);
-
-                auto new_mutexes = std::make_unique<std::mutex[]>(capacity);
-                // no need to copy old ones, just replace
-                user_mutexes = std::move(new_mutexes);
-            }
-
-            // Zero out just the new row
-            std::fill(data.get() + user_id * columns, data.get() + (user_id + 1) * columns, 0.0f);
-            return user_id;
-        }
-
-        std::vector<std::vector<float>> get_portfolio_table() const {
-            auto read_lock = std::shared_lock(data_mutex);
-            auto table = std::vector<std::vector<float>>(user_count, std::vector<float>(columns));
-
-            for (UserID user_index = 0; user_index < user_count; user_index++) {
-                std::unique_lock user_lock(user_mutexes[user_index]);
-                std::memcpy(
-                    table[user_index].data(),
-                    data.get() + user_index * columns,
-                    columns * sizeof(float)
-                );
-            }
-
-            return table;
-        }
-
-        void reset_user_position(UserID user_id) {
-            assert(user_id < user_count);
-            auto read_lock = std::shared_lock(data_mutex);
-            auto user_lock = std::unique_lock(user_mutexes[user_id]);
-
-            std::fill(data.get() + user_id * columns, data.get() + (user_id + 1) * columns, 0.0f);
-        }
-
-        // `security_1 += addition_1`
-        // returns: the new value of the security in the portfolio
-        float add_to_security(UserID user_id, SecurityID security_1, float addition_1) {
-            assert(user_id < user_count);
-            assert(security_1 < columns);
-
-            auto read_lock = std::shared_lock(data_mutex);
-            auto user_lock = std::unique_lock(user_mutexes[user_id]);
-
-            auto& ref = data[user_id * columns + security_1];
-            ref += addition_1;
-            return ref;
-        }
-
-        // `security_1 += addition_1`, `security_2 += addition_2`
-        // returns: a pair of the new portfolio values
-        std::pair<float, float> add_to_two_securities(UserID user_id, SecurityID security_1, float addition_1, SecurityID security_2, float addition_2) {
-            assert(user_id < user_count);
-            assert(security_1 < columns);
-            assert(security_2 < columns);
-            assert(security_1 != security_2);
-
-            auto read_lock = std::shared_lock(data_mutex);
-            auto user_lock = std::unique_lock(user_mutexes[user_id]);
-
-            auto& ref_1 = data[user_id * columns + security_1];
-            ref_1 += addition_1;
-            auto& ref_2 = data[user_id * columns + security_2];
-            ref_2 += addition_2;
-            return { ref_1, ref_2 };
-        }
-
-        // `security_2 += security_1 * multiply`
-        // returns: the new value of security_2
-        float multiply_and_add_1_to_2(UserID user_id, SecurityID security_1, SecurityID security_2, float multiply) {
-            assert(user_id < user_count);
-            assert(security_1 < columns);
-            assert(security_2 < columns);
-            assert(security_1 != security_2);
-
-            auto read_lock = std::shared_lock(data_mutex);
-            auto user_lock = std::unique_lock(user_mutexes[user_id]);
-
-            auto& ref_to_multiply_from = data[user_id * columns + security_1];
-            auto& ref_to_mult_and_add = data[user_id * columns + security_2];
-            ref_to_mult_and_add += ref_to_multiply_from * multiply;
-            return ref_to_mult_and_add;
-        }
-
-        // `security_2 += security_1 * multiply`, then `security_1 = set_value`
-        // returns: the new value of security_2
-        float multiply_and_add_1_to_2_and_set_1(UserID user_id, SecurityID security_1, SecurityID security_2, float multiply, float set_value) {
-            assert(user_id < user_count);
-            assert(security_1 < columns);
-            assert(security_2 < columns);
-            assert(security_1 != security_2);
-
-            auto read_lock = std::shared_lock(data_mutex);
-            auto user_lock = std::unique_lock(user_mutexes[user_id]);
-
-            auto& ref_to_set = data[user_id * columns + security_1];
-            auto& ref_to_mult_and_add = data[user_id * columns + security_2];
-            ref_to_mult_and_add += ref_to_set * multiply;
-            ref_to_set = set_value;
-            return ref_to_mult_and_add;
-        }
-    };
-
-    enum OrderSide : uint8_t {
-        BID,
-        ASK
-    };
-    struct LimitOrder {
-        UserID user_id;
-        OrderID order_id;
-        OrderSide side;
-        float price;
-        float volume;
-
-        struct BidComparator {
-            bool operator()(const LimitOrder& a, const LimitOrder& b) const {
-                return (a.price != b.price) ? (a.price > b.price) : (a.order_id < b.order_id);
-            }
-        };
-        struct AskComparator {
-            bool operator()(const LimitOrder& a, const LimitOrder& b) const {
-                return (a.price != b.price) ? (a.price < b.price) : (a.order_id < b.order_id);
-            }
-        };
-    };
-    struct CancelOrder {
-        UserID user_id;
-        OrderID order_id;
-    };
-    using CommandVariant = std::variant<LimitOrder, CancelOrder>;
-
-    struct Transaction {
-        float price;
-        float volume;
-        UserID buyer_id;
-        UserID seller_id;
-    };
-
-    // Keeps track of both sides (bids and asks) of a CLOB
-    class OrderBook {
-        using BidSet = std::set<LimitOrder, LimitOrder::BidComparator>;
-        using AskSet = std::set<LimitOrder, LimitOrder::AskComparator>;
-
-        BidSet bid_orders;
-        AskSet ask_orders;
-        std::unordered_map<OrderID, BidSet::iterator> bid_map;
-        std::unordered_map<OrderID, AskSet::iterator> ask_map;
-    public:
-        // (bid, ask) pair of depths
-        using BookDepth = std::pair<std::map<float, float>, std::map<float, float>>;
-
-        std::size_t bid_size() const {
-            return bid_orders.size();
-        }
-
-        std::size_t ask_size() const {
-            return ask_orders.size();
-        }
-
-        bool has_order(OrderID order_id) {
-            return bid_map.find(order_id) != bid_map.end() || ask_map.find(order_id) != ask_map.end();
-        }
-
-        bool insert_order(const LimitOrder& order) {
-            if (order.side == BID) {
-                auto [it, inserted] = bid_orders.insert(order);
-                if (!inserted) return false;
-                bid_map[order.order_id] = it;
-            }
-            else {
-                auto [it, inserted] = ask_orders.insert(order);
-                if (!inserted) return false;
-                ask_map[order.order_id] = it;
-            }
-            return true;
-        }
-
-        bool cancel_order(const CancelOrder& cancel) {
-            if (auto it = bid_map.find(cancel.order_id); it != bid_map.end()) {
-                bid_orders.erase(it->second);
-                bid_map.erase(it);
-                return true;
-            }
-            else if (auto it = ask_map.find(cancel.order_id); it != ask_map.end()) {
-                ask_orders.erase(it->second);
-                ask_map.erase(it);
-                return true;
-            }
+        // Inherited via ISecurity
+        bool is_tradeable() override
+        {
             return false;
         }
-
-        LimitOrder& top_bid() {
-            if (bid_orders.empty()) {
-                throw std::runtime_error("Bid book is empty.");
-            }
-            return const_cast<LimitOrder&>(*bid_orders.begin());
-        }
-
-        LimitOrder& top_ask() {
-            if (ask_orders.empty()) {
-                throw std::runtime_error("Ask book is empty.");
-            }
-            return const_cast<LimitOrder&>(*ask_orders.begin());
-        }
-
-        void pop_top_bid() {
-            assert(!bid_orders.empty());
-            auto it = bid_orders.begin();
-            bid_map.erase(it->order_id);
-            bid_orders.erase(it);
-        }
-
-        void pop_top_ask() {
-            assert(!ask_orders.empty());
-            auto it = ask_orders.begin();
-            ask_map.erase(it->order_id);
-            ask_orders.erase(it);
-        }
-
-        BookDepth get_book_depth() const {
-            std::map<float, float> bid_depth;
-            std::map<float, float> ask_depth;
-
-            // For bids, accumulate by descending price
-            float accumulated_bid_depth = 0.0f;
-            for (const auto& order : bid_orders) {
-                accumulated_bid_depth += order.volume;
-                bid_depth[order.price] = accumulated_bid_depth;
-            }
-
-            // For asks, accumulate by ascending price
-            float accumulated_ask_depth = 0.0f;
-            for (const auto& order : ask_orders) {
-                accumulated_ask_depth += order.volume;
-                ask_depth[order.price] = accumulated_ask_depth;
-            }
-
-            return { bid_depth, ask_depth };
-        }
-
-        std::pair<std::vector<LimitOrder>, std::vector<LimitOrder>> get_limit_orders() const {
-            std::vector<LimitOrder> bids(bid_orders.begin(), bid_orders.end());
-            std::vector<LimitOrder> asks(ask_orders.begin(), ask_orders.end());
-            return { std::move(bids), std::move(asks) };
-        }
-
-        std::set<OrderID> get_all_user_orders(UserID user_id) const {
-            std::set<OrderID> result;
-            for (const auto& [order_id, it] : bid_map) {
-                if (it->user_id == user_id) {
-                    result.insert(order_id);
-                }
-            }
-            for (const auto& [order_id, it] : ask_map) {
-                if (it->user_id == user_id) {
-                    result.insert(order_id);
-                }
-            }
-            return result;
-        }
-    };
-
-    class Simulation;
-
-    class ISecurity {
-    public:
-        virtual bool is_tradeable() = 0;
-        virtual void before_step(Simulation& simulation) = 0;
-        virtual void after_step(Simulation& simulation) = 0;
-        virtual void on_simulation_start(Simulation& simulation) = 0;
-        virtual void on_simulation_end(Simulation& simulation) = 0;
-        virtual void on_trade_executed(
+        void before_step(Simulation& simulation) override {}
+        void after_step(Simulation& simulation) override {}
+        void on_simulation_start(Simulation& simulation) override {}
+        void on_simulation_end(Simulation& simulation) override {}
+        void on_trade_executed(
             Simulation& simulation,
-            UserID buyer_id, UserID seller_id, float transacted_price, float transacted_volume
-        ) = 0;
-    };
-
-    class Simulation {
-        const uint32_t N;
-        const float T;
-        const uint32_t security_count;
-        uint32_t current_step = 0;
-        const std::map<SecurityTicker, std::shared_ptr<ISecurity>> ticker_to_security;
-        std::shared_ptr<UserPortfolioTable> user_table;
-        std::map<SecurityID, SecurityTicker> id_to_ticker = {};
-        std::map<SecurityID, std::shared_ptr<ISecurity>> id_to_security = {};
-        std::vector<std::shared_ptr<ISecurity>> securities = {};
-        std::vector<SecurityID> security_ids = {};
-        std::vector<SecurityTicker> security_tickers = {};
-        std::vector<OrderBook> order_books = {};
-        std::map<UserID, Username> user_id_to_username = {};
-
-        std::mutex order_queue_mutex = std::mutex();
-        uint32_t order_id_counter = 0;
-        std::map<SecurityID, std::vector<CommandVariant>> submitted_orders = {};
-    public:
-        explicit Simulation(
-            std::map<SecurityTicker, std::shared_ptr<ISecurity>>&& ticker_to_security,
-            uint32_t N,
-            float T
-        ) : N{ N }, T{ T }, security_count{ (uint32_t)ticker_to_security.size() }, ticker_to_security{ std::move(ticker_to_security) }, user_table{ std::make_unique<UserPortfolioTable>(security_count) } {
-            SecurityID security_id = 0;
-            for (const auto& [ticker, security] : this->ticker_to_security) {
-                id_to_ticker.emplace(security_id, ticker);
-                id_to_security.emplace(security_id, security);
-                submitted_orders.emplace(security_id, std::vector<CommandVariant>());
-
-                securities.push_back(security);
-                security_ids.push_back(security_id);
-                security_tickers.push_back(ticker);
-                order_books.push_back(OrderBook());
-
-                security_id += 1;
-            }
-        }
-    private:
-        std::vector<std::shared_ptr<ISecurity>>& get_securities() {
-            return securities;
-        }
-        std::vector<SecurityID>& get_security_ids() {
-            return security_ids;
-        }
-        std::shared_ptr<ISecurity>& get_security(SecurityID security_id) {
-            assert(id_to_security.find(security_id) != id_to_security.end());
-            return id_to_security[security_id];
-        }
-
-        void increment_step() {
-            current_step += 1;
-        }
-
-        // Ignore these for now
-        void on_simulation_start_1() {}
-        void on_simulation_start_2() {}
-        void on_simulation_end_1() {}
-        void on_simulation_end_2() {}
-    public:
-        UserID add_user(const Username& username) {
-            auto user_id = user_table->register_new_user();
-            user_id_to_username.emplace(user_id, username);
-            return user_id;
-        }
-
-        const std::map<UserID, Username>& get_user_id_to_username_map() const {
-            return user_id_to_username;
-        }
-
-        auto get_user_table() {
-            return user_table;
-        }
-
-        SecurityID get_security_id(const SecurityTicker& ticker) const {
-            for (uint32_t i = 0; i < security_tickers.size(); i++) {
-                if (security_tickers[i] == ticker) {
-                    return i;
-                }
-            }
-            throw std::runtime_error("Could not find such a ticker.");
-        }
-
-        std::vector<SecurityTicker> get_all_tickers() const {
-            return security_tickers;
-        }
-
-        const SecurityTicker& get_security_ticker(SecurityID security_id) const {
-            assert(security_id < security_tickers.size());
-            return security_tickers.at(security_id);
-        }
-
-        OrderBook& get_order_book(SecurityID security_id) {
-            assert(security_id < order_books.size());
-            return order_books[security_id];
-        }
-
-        float get_dt() const {
-            return T / N;
-        }
-
-        float get_t() const {
-            return current_step * T / N;
-        }
-
-        uint32_t get_current_step() const {
-            return current_step;
-        }
-
-        uint32_t get_N() const {
-            return N;
-        }
-
-        // Doesn't remove users, only resets their portfolios
-        void reset_simulation() {
-            auto order_queue_lock = std::unique_lock(order_queue_mutex);
-            for (auto& [security_id, vec] : submitted_orders) {
-                vec.clear();
-            }
-
-            auto user_table = get_user_table();
-            for (UserID user_id = 0; user_id < user_table->get_user_count(); user_id++) {
-                user_table->reset_user_position(user_id);
-            }
-            current_step = 0;
-        }
-
-        OrderID submit_limit_order(UserID user_id, SecurityID security, OrderSide side, float price, float volume) {
-            assert(user_id < user_table->get_user_count());
-            assert(security < security_tickers.size());
-            assert(submitted_orders.find(security) != submitted_orders.end());
-            auto order_queue_lock = std::unique_lock(order_queue_mutex);
-            auto order_id = order_id_counter++;
-            submitted_orders[security].push_back(LimitOrder{ .user_id = user_id, .order_id = order_id_counter, .side = side, .price = price, .volume = volume });
-            return order_id;
-        }
-
-        void submit_cancel_order(UserID user_id, SecurityID security, OrderID order_id) {
-            assert(user_id < user_table->get_user_count());
-            assert(submitted_orders.find(security) != submitted_orders.end());
-            auto order_queue_lock = std::unique_lock(order_queue_mutex);
-            submitted_orders[security].push_back(CancelOrder{ .user_id = user_id, .order_id = order_id });
-        }
-
-        struct SimulationStepResult {
-            std::map<SecurityTicker, std::map<OrderID, float>> partially_transacted_orders;
-            std::map<SecurityTicker, std::set<OrderID>> fully_transacted_orders;
-            std::map<SecurityTicker, std::set<OrderID>> cancelled_orders;
-            std::map<SecurityTicker, std::vector<Transaction>> transactions;
-            std::map<SecurityTicker, OrderBook::BookDepth> order_book_depth_per_security;
-            std::map<SecurityTicker, std::pair<std::vector<LimitOrder>, std::vector<LimitOrder>>> order_book_per_security;
-            std::vector<std::vector<float>> portfolios;
-            std::map<UserID, Username> user_id_to_username_map;
-            uint32_t current_step;
-            bool has_next_step;
-        };
-        SimulationStepResult do_simulation_step() {
-            auto submitted_orders_lock = std::unique_lock(order_queue_mutex);
-            // Perform a simulaiton step
-            auto step = get_current_step(); // step ∈ [0, ..., N] inclusive
-            if (step > get_N()) {
-                throw std::runtime_error("Passed simulation endpoint!");
-            }
-
-            auto t = get_t(); // t ∈ [0, ..., T]
-            auto dt = get_dt(); // dt = T / N
-
-            if (step == 0) {
-                on_simulation_start_1();
-                for (auto& security : get_securities()) {
-                    security->on_simulation_start(*this);
-                }
-                on_simulation_start_2();
-            }
-
-            for (auto& security : get_securities()) {
-                security->before_step(*this);
-            }
-
-            // Keep track of market updates
-            std::map<SecurityTicker, std::map<OrderID, float>> partially_transacted_orders = {}; // ticker -> order_id -> new volume
-            std::map<SecurityTicker, std::set<OrderID>> fully_transacted_orders = {};
-            std::map<SecurityTicker, std::set<OrderID>> cancelled_orders = {};
-            std::map<SecurityTicker, std::vector<Transaction>> transactions = {};
-
-            // Here would the command queues normally be
-            for (auto security_id : get_security_ids()) {
-                if (submitted_orders.find(security_id) == submitted_orders.end()) {
-                    std::cout << "This security didn't have a queue! Fix this!\n";
-                    continue;
-                }
-                auto& security_class = get_security(security_id);
-                auto& order_book = get_order_book(security_id);
-                auto& commands = submitted_orders.at(security_id);
-
-                // Keep track of market updates for a particular security
-                auto local_partially_transacted_orders = std::map<OrderID, float>();
-                auto local_fully_transacted_orders = std::set<OrderID>();
-                auto local_cancelled_orders = std::set<OrderID>();
-                auto local_transactions = std::vector<Transaction>();
-
-                for (auto& variant_command : commands) {
-                    auto index = variant_command.index();
-
-                    if (index == 0) {
-                        {
-                            // Invariant: the market must not be crossed before submitting a new order
-                            const auto has_orders_on_both_sides = order_book.bid_size() > 0 && order_book.ask_size() > 0;
-                            const auto is_market_crossed = has_orders_on_both_sides && (order_book.top_bid().price >= order_book.top_ask().price);
-                            assert(!is_market_crossed);
-                        }
-
-                        LimitOrder& order = std::get<0>(variant_command);
-                        // Insert the order
-                        order_book.insert_order(order);
-
-                        // The order book is now potentially crossed, we must resolve it
-                        // additionally, if it was crossed, it is due to the added order, by our invariants
-                        while (true) {
-                            if (order_book.bid_size() > 0 && order_book.ask_size() > 0) {
-                                auto& top_bid = order_book.top_bid();
-                                auto& top_ask = order_book.top_ask();
-                                if (top_bid.price >= top_ask.price) {
-                                    // The trades will execute on the submitted order's opposite side.
-                                    // If the submitted order is a bid, the market is crossed because of it, 
-                                    // the execution price will be of the ask. And vice-versa if the crossing is ask.
-                                    auto transacted_price = order.side == OrderSide::BID ? top_ask.price : top_bid.price;
-                                    auto transacted_volume = std::min(top_bid.volume, top_ask.volume);
-
-                                    auto buyer_id = top_bid.user_id;
-                                    auto seller_id = top_ask.user_id;
-
-                                    auto top_bid_id = top_bid.order_id;
-                                    auto top_ask_id = top_ask.order_id;
-
-                                    // After this `top_bid` may be invalidated
-                                    auto remaining_bid_volume = top_bid.volume - transacted_volume;
-                                    if (remaining_bid_volume == 0) {
-                                        local_partially_transacted_orders.erase(top_bid_id);
-                                        local_fully_transacted_orders.emplace(top_bid_id);
-                                        order_book.pop_top_bid();
-                                    }
-                                    else {
-                                        top_bid.volume = remaining_bid_volume;
-                                        local_partially_transacted_orders[top_bid_id] = remaining_bid_volume;
-                                    }
-
-                                    // After this `top_ask` may be invalidated
-                                    auto remaining_ask_volume = top_ask.volume - transacted_volume;
-                                    if (remaining_ask_volume == 0) {
-                                        local_partially_transacted_orders.erase(top_ask_id);
-                                        local_fully_transacted_orders.emplace(top_ask_id);
-                                        order_book.pop_top_ask();
-                                    }
-                                    else {
-                                        top_ask.volume = remaining_ask_volume;
-                                        local_partially_transacted_orders[top_ask_id] = remaining_ask_volume;
-                                    }
-
-                                    // Perform custom security trade resolution
-                                    // Must often this is used to simply modify security and cash accounts
-                                    security_class->on_trade_executed(*this, buyer_id, seller_id, transacted_price, transacted_volume);
-                                    local_transactions.push_back(Transaction{ .price = transacted_price, .volume = transacted_volume, .buyer_id = buyer_id, .seller_id = seller_id });
-                                }
-                                else {
-                                    break;
-                                }
-                            }
-                            else {
-                                break;
-                            }
-                        }
-
-                        {
-                            // Invariant: the market must not be crossed after submitting an order and executing it
-                            const auto has_orders_on_both_sides = order_book.bid_size() > 0 && order_book.ask_size() > 0;
-                            const auto is_market_crossed = has_orders_on_both_sides && (order_book.top_bid().price >= order_book.top_ask().price);
-                            assert(!is_market_crossed);
-                        }
-                    }
-                    else if (index == 1) {
-                        CancelOrder& order = std::get<1>(variant_command);
-                        auto was_cancelled = order_book.cancel_order(order);
-                        if (was_cancelled) {
-                            local_cancelled_orders.insert(order.order_id);
-                        }
-                        if (order_book.has_order(order.order_id)) {
-                            throw std::runtime_error("Order should have been removed!");
-                        }
-                    }
-                    else {
-                        assert(false);
-                    }
-                }
-
-                // Save the differences to a simulation step object
-                const auto& ticker = get_security_ticker(security_id);
-                partially_transacted_orders.emplace(ticker, local_partially_transacted_orders);
-                fully_transacted_orders.emplace(ticker, local_fully_transacted_orders);
-                cancelled_orders.emplace(ticker, local_cancelled_orders);
-                transactions.emplace(ticker, local_transactions);
-            
-                // Reset the submitted_order[security_id] vector
-                commands.clear();
-            }
-
-            for (auto& security : get_securities()) {
-                security->after_step(*this);
-            }
-
-            if (step == N) {
-                on_simulation_end_1();
-                for (auto& security : get_securities()) {
-                    security->on_simulation_end(*this);
-                }
-                on_simulation_end_2();
-            }
-
-            auto order_book_depth_per_security = std::map<SecurityTicker, OrderBook::BookDepth>();
-            auto order_book_per_security = std::map<SecurityTicker, std::pair<std::vector<LimitOrder>, std::vector<LimitOrder>>>();
-            for (auto security_id : get_security_ids()) {
-                const auto& ticker = get_security_ticker(security_id);
-                const auto& order_book = get_order_book(security_id);
-                order_book_depth_per_security[ticker] = order_book.get_book_depth();
-                order_book_per_security[ticker] = order_book.get_limit_orders();
-            }
-
-            auto user_table = get_user_table();
-            auto portfolios = user_table->get_portfolio_table();
-
-            auto& user_id_to_username_map = get_user_id_to_username_map();
-
-            increment_step();
-            assert(get_current_step() > 0);
-            return SimulationStepResult{
-                .partially_transacted_orders = partially_transacted_orders,
-                .fully_transacted_orders = fully_transacted_orders,
-                .cancelled_orders = cancelled_orders,
-                .transactions = transactions,
-                .order_book_depth_per_security = order_book_depth_per_security,
-                .order_book_per_security = order_book_per_security,
-                .portfolios = portfolios,
-                .user_id_to_username_map = user_id_to_username_map,
-                .current_step = get_current_step() - 1,
-                .has_next_step = get_current_step() <= get_N()
-            };
+            Server::UserID buyer, Server::UserID seller, float price, float quantity
+        ) override {
         }
     };
 
-    namespace DemoSecurities {
-        class Security_CAD : public Server::ISecurity {
-        public:
-            // Inherited via ISecurity
-            bool is_tradeable() override
-            {
-                return false;
+    class Security_BOND : public Server::ISecurity {
+        float rate = 0.05f;
+        float face_value = 100.0f;
+    public:
+        // Inherited via ISecurity
+        bool is_tradeable() override
+        {
+            return true;
+        }
+        void before_step(Simulation& simulation) override {}
+        void after_step(Simulation& simulation) override {
+            // Bonds make interest payment
+            auto dt = simulation.get_dt();
+            auto bond_id = simulation.get_security_id("BOND");
+            auto cad_id = simulation.get_security_id("CAD");
+            auto user_table = simulation.get_user_table();
+            for (UserID index_user = 0; index_user < user_table->get_user_count(); index_user++) {
+                // The bond pays `rate * dt` per step, having more bonds increases nomial amount added to cad
+                user_table->multiply_and_add_1_to_2(
+                    index_user, bond_id, cad_id, rate * face_value * dt
+                );
             }
-            void before_step(Simulation& simulation) override {}
-            void after_step(Simulation& simulation) override {}
-            void on_simulation_start(Simulation& simulation) override {}
-            void on_simulation_end(Simulation& simulation) override {}
-            void on_trade_executed(
-                Simulation& simulation,
-                Server::UserID buyer, Server::UserID seller, float price, float quantity
-            ) override {
+        }
+        void on_simulation_start(Simulation& simulation) override {}
+        void on_simulation_end(Simulation& simulation) override {
+            auto bond_id = simulation.get_security_id("BOND");
+            auto cad_id = simulation.get_security_id("CAD");
+            auto user_table = simulation.get_user_table();
+            for (UserID index_user = 0; index_user < user_table->get_user_count(); index_user++) {
+                // Reduce the amount of bond to 0, and realize it as CAD (each bond is worth 100).
+                user_table->multiply_and_add_1_to_2_and_set_1(
+                    index_user, bond_id, cad_id, face_value, 0.0f
+                );
             }
-        };
+        }
+        void on_trade_executed(
+            Simulation& simulation,
+            Server::UserID buyer, Server::UserID seller, float price, float quantity
+        ) override {
+            auto bond_id = simulation.get_security_id("BOND");
+            auto cad_id = simulation.get_security_id("CAD");
+            auto user_table = simulation.get_user_table();
+            // The bond buyer gets the bond, but losses money
+            user_table->add_to_two_securities(buyer, bond_id, quantity, cad_id, -price * quantity);
+            // The bond seller losses the bond, but gets money
+            user_table->add_to_two_securities(seller, bond_id, -quantity, cad_id, price * quantity);
+        }
+    };
 
-        class Security_BOND : public Server::ISecurity {
-            float rate = 0.05f;
-            float face_value = 100.0f;
-        public:
-            // Inherited via ISecurity
-            bool is_tradeable() override
-            {
-                return true;
-            }
-            void before_step(Simulation& simulation) override {}
-            void after_step(Simulation& simulation) override {
-                // Bonds make interest payment
-                auto dt = simulation.get_dt();
-                auto bond_id = simulation.get_security_id("BOND");
-                auto cad_id = simulation.get_security_id("CAD");
-                auto user_table = simulation.get_user_table();
-                for (UserID index_user = 0; index_user < user_table->get_user_count(); index_user++) {
-                    // The bond pays `rate * dt` per step, having more bonds increases nomial amount added to cad
-                    user_table->multiply_and_add_1_to_2(
-                        index_user, bond_id, cad_id, rate * face_value * dt
-                    );
-                }
-            }
-            void on_simulation_start(Simulation& simulation) override {}
-            void on_simulation_end(Simulation& simulation) override {
-                auto bond_id = simulation.get_security_id("BOND");
-                auto cad_id = simulation.get_security_id("CAD");
-                auto user_table = simulation.get_user_table();
-                for (UserID index_user = 0; index_user < user_table->get_user_count(); index_user++) {
-                    // Reduce the amount of bond to 0, and realize it as CAD (each bond is worth 100).
-                    user_table->multiply_and_add_1_to_2_and_set_1(
-                        index_user, bond_id, cad_id, face_value, 0.0f
-                    );
-                }
-            }
-            void on_trade_executed(
-                Simulation& simulation,
-                Server::UserID buyer, Server::UserID seller, float price, float quantity
-            ) override {
-                auto bond_id = simulation.get_security_id("BOND");
-                auto cad_id = simulation.get_security_id("CAD");
-                auto user_table = simulation.get_user_table();
-                // The bond buyer gets the bond, but losses money
-                user_table->add_to_two_securities(buyer, bond_id, quantity, cad_id, -price * quantity);
-                // The bond seller losses the bond, but gets money
-                user_table->add_to_two_securities(seller, bond_id, -quantity, cad_id, price * quantity);
-            }
-        };
-
-        class Security_STOCK : public Server::ISecurity {
-            // Inherited via ISecurity
-            bool is_tradeable() override
-            {
-                return true;
-            }
-            void before_step(Simulation& simulation) override {}
-            void after_step(Simulation& simulation) override {}
-            void on_simulation_start(Simulation& simulation) override {}
-            void on_simulation_end(Simulation& simulation) override {
-                // At the end convert to CAD at midpoint price, or `100.0f`
-                auto stock_id = simulation.get_security_id("STOCK");
-                auto cad_id = simulation.get_security_id("CAD");
+    class Security_STOCK : public Server::ISecurity {
+        // Inherited via ISecurity
+        bool is_tradeable() override
+        {
+            return true;
+        }
+        void before_step(Simulation& simulation) override {}
+        void after_step(Simulation& simulation) override {}
+        void on_simulation_start(Simulation& simulation) override {}
+        void on_simulation_end(Simulation& simulation) override {
+            // At the end convert to CAD at midpoint price, or `100.0f`
+            auto stock_id = simulation.get_security_id("STOCK");
+            auto cad_id = simulation.get_security_id("CAD");
 
 
-                auto& order_book = simulation.get_order_book(stock_id);
-                auto close_bid_price = 100.0f;
-                auto close_ask_price = 100.0f;
-                if (order_book.bid_size() > 0) {
-                    close_bid_price = order_book.top_bid().price;
-                }
-                if (order_book.ask_size() > 0) {
-                    close_ask_price = order_book.top_ask().price;
-                }
+            auto& order_book = simulation.get_order_book(stock_id);
+            auto close_bid_price = 100.0f;
+            auto close_ask_price = 100.0f;
+            if (order_book.bid_size() > 0) {
+                close_bid_price = order_book.top_bid().price;
+            }
+            if (order_book.ask_size() > 0) {
+                close_ask_price = order_book.top_ask().price;
+            }
 
-                auto user_table = simulation.get_user_table();
-                for (UserID index_user = 0; index_user < user_table->get_user_count(); index_user++) {
-                    user_table->multiply_and_add_1_to_2_and_set_1(
-                        index_user, stock_id, cad_id, (close_bid_price + close_ask_price) / 2.0f, 0.0f
-                    );
-                }
+            auto user_table = simulation.get_user_table();
+            for (UserID index_user = 0; index_user < user_table->get_user_count(); index_user++) {
+                user_table->multiply_and_add_1_to_2_and_set_1(
+                    index_user, stock_id, cad_id, (close_bid_price + close_ask_price) / 2.0f, 0.0f
+                );
             }
-            void on_trade_executed(
-                Simulation& simulation,
-                Server::UserID buyer, Server::UserID seller, float price, float quantity
-            ) override {
-                auto stock_id = simulation.get_security_id("STOCK");
-                auto cad_id = simulation.get_security_id("CAD");
-                auto user_table = simulation.get_user_table();
-                // The buyer gets the stock, but losses money
-                user_table->add_to_two_securities(buyer, stock_id, quantity, cad_id, -price * quantity);
-                // The seller losses the stock, but gets money
-                user_table->add_to_two_securities(seller, stock_id, -quantity, cad_id, price * quantity);
-            }
-        };
-    }
+        }
+        void on_trade_executed(
+            Simulation& simulation,
+            Server::UserID buyer, Server::UserID seller, float price, float quantity
+        ) override {
+            auto stock_id = simulation.get_security_id("STOCK");
+            auto cad_id = simulation.get_security_id("CAD");
+            auto user_table = simulation.get_user_table();
+            // The buyer gets the stock, but losses money
+            user_table->add_to_two_securities(buyer, stock_id, quantity, cad_id, -price * quantity);
+            // The seller losses the stock, but gets money
+            user_table->add_to_two_securities(seller, stock_id, -quantity, cad_id, price * quantity);
+        }
+    };
+};
+*/
+
+
+struct IDNotFoundError : std::out_of_range {
+	using std::out_of_range::out_of_range;
 };
 
-namespace nlohmann {
-    void to_json(json& j, const Server::OrderSide& side) {
-        j = std::string{ magic_enum::enum_name(side) };
-    }
+using UserID = uint32_t;
+using SecurityID = uint32_t;
+using SecurityTicker = std::string;
+using OrderID = uint32_t;
+using Username = std::string;
+using FloatPair = std::pair<float, float>;
 
-    void to_json(nlohmann::json& j, const Server::Transaction& t) {
-        j = nlohmann::json{
-            {"price", t.price},
-            {"volume", t.volume},
-            {"buyer_id", t.buyer_id},
-            {"seller_id", t.seller_id}
-        };
-    }
+enum OrderSide : uint8_t {
+	BID,
+	ASK
+};
+struct LimitOrder {
+	UserID user_id;
+	OrderID order_id;
+	OrderSide side;
+	float price;
+	float volume;
 
-    void to_json(json& j, const Server::LimitOrder& order) {
-        j = json{
-            {"user_id", order.user_id},
-            {"order_id", order.order_id},
-            {"side", order.side},
-            {"price", order.price},
-            {"volume", order.volume}
-        };
-    }
+	struct BidComparator {
+		bool operator()(const LimitOrder& a, const LimitOrder& b) const {
+			return (a.price != b.price) ? (a.price > b.price) : (a.order_id < b.order_id);
+		}
+	};
+	struct AskComparator {
+		bool operator()(const LimitOrder& a, const LimitOrder& b) const {
+			return (a.price != b.price) ? (a.price < b.price) : (a.order_id < b.order_id);
+		}
+	};
+};
+struct CancelOrder {
+	UserID user_id;
+	OrderID order_id;
+};
+using OrderVariant = std::variant<LimitOrder, CancelOrder>;
 
-    void to_json(json& j, const Server::CancelOrder& cancel) {
-        j = json{
-            {"user_id", cancel.user_id},
-            {"order_id", cancel.order_id}
-        };
-    }
-}
+// (bid, ask) pair of depths
+using BookDepth = std::pair<std::map<float, float>, std::map<float, float>>;
+using FlatOrderBook = std::pair<std::vector<LimitOrder>, std::vector<LimitOrder>>;
+class OrderBook {
+	using BidSet = std::set<LimitOrder, LimitOrder::BidComparator>;
+	using AskSet = std::set<LimitOrder, LimitOrder::AskComparator>;
 
-class PyISecurity : public Server::ISecurity {
+	BidSet bid_orders;
+	AskSet ask_orders;
+	std::map<OrderID, BidSet::iterator> bid_map;
+	std::map<OrderID, AskSet::iterator> ask_map;
 public:
-    using Server::ISecurity::ISecurity;
+	std::size_t bid_size() const {
+		return bid_orders.size();
+	}
 
-    bool is_tradeable() override {
-        PYBIND11_OVERRIDE_PURE(
-            bool,                  // Return type
-            Server::ISecurity,     // Parent class
-            is_tradeable           // Name of function in C++
-            // No arguments
-        );
-    }
+	std::size_t ask_size() const {
+		return ask_orders.size();
+	}
 
-    void before_step(Server::Simulation& sim) override {
-        PYBIND11_OVERRIDE_PURE(
-            void,
-            Server::ISecurity,
-            before_step,
-            sim
-        );
-    }
+	bool has_order(OrderID order_id) {
+		return bid_map.find(order_id) != bid_map.end() || ask_map.find(order_id) != ask_map.end();
+	}
 
-    void after_step(Server::Simulation& sim) override {
-        PYBIND11_OVERRIDE_PURE(
-            void,
-            Server::ISecurity,
-            after_step,
-            sim
-        );
-    }
+	bool insert_order(const LimitOrder& order) {
+		if (order.side == BID) {
+			auto [it, inserted] = bid_orders.insert(order);
+			if (!inserted) return false;
+			bid_map[order.order_id] = it;
+		}
+		else {
+			auto [it, inserted] = ask_orders.insert(order);
+			if (!inserted) return false;
+			ask_map[order.order_id] = it;
+		}
+		return true;
+	}
 
-    void on_simulation_start(Server::Simulation& sim) override {
-        PYBIND11_OVERRIDE_PURE(
-            void,
-            Server::ISecurity,
-            on_simulation_start,
-            sim
-        );
-    }
+	bool cancel_order(const CancelOrder& cancel) {
+		if (auto it = bid_map.find(cancel.order_id); it != bid_map.end()) {
+			bid_orders.erase(it->second);
+			bid_map.erase(it);
+			return true;
+		}
+		else if (auto it = ask_map.find(cancel.order_id); it != ask_map.end()) {
+			ask_orders.erase(it->second);
+			ask_map.erase(it);
+			return true;
+		}
+		return false;
+	}
 
-    void on_simulation_end(Server::Simulation& sim) override {
-        PYBIND11_OVERRIDE_PURE(
-            void,
-            Server::ISecurity,
-            on_simulation_end,
-            sim
-        );
-    }
+	LimitOrder& top_bid() const {
+		if (bid_orders.empty()) {
+			throw std::runtime_error("Bid book is empty.");
+		}
+		return const_cast<LimitOrder&>(*bid_orders.begin());
+	}
 
-    void on_trade_executed(Server::Simulation& sim, Server::UserID buyer,
-        Server::UserID seller, float transacted_price,
-        float transacted_volume) override {
-        PYBIND11_OVERRIDE_PURE(
-            void,
-            Server::ISecurity,
-            on_trade_executed,
-            sim, buyer, seller, transacted_price, transacted_volume
-        );
-    }
+	LimitOrder& top_ask() const {
+		if (ask_orders.empty()) {
+			throw std::runtime_error("Ask book is empty.");
+		}
+		return const_cast<LimitOrder&>(*ask_orders.begin());
+	}
+
+	void pop_top_bid() {
+		if (bid_orders.empty()) {
+			throw std::runtime_error("Bid book is empty.");
+		}
+		auto it = bid_orders.begin();
+		bid_map.erase(it->order_id);
+		bid_orders.erase(it);
+	}
+
+	void pop_top_ask() {
+		if (ask_orders.empty()) {
+			throw std::runtime_error("Ask book is empty.");
+		}
+		auto it = ask_orders.begin();
+		ask_map.erase(it->order_id);
+		ask_orders.erase(it);
+	}
+
+	BookDepth get_book_depth() const {
+		std::map<float, float> bid_depth;
+		std::map<float, float> ask_depth;
+
+		// For bids, accumulate by descending price
+		float accumulated_bid_depth = 0.0f;
+		for (const auto& order : bid_orders) {
+			accumulated_bid_depth += order.volume;
+			bid_depth[order.price] = accumulated_bid_depth;
+		}
+
+		// For asks, accumulate by ascending price
+		float accumulated_ask_depth = 0.0f;
+		for (const auto& order : ask_orders) {
+			accumulated_ask_depth += order.volume;
+			ask_depth[order.price] = accumulated_ask_depth;
+		}
+
+		return { bid_depth, ask_depth };
+	}
+
+	FlatOrderBook get_limit_orders() const {
+		std::vector<LimitOrder> bids(bid_orders.begin(), bid_orders.end());
+		std::vector<LimitOrder> asks(ask_orders.begin(), ask_orders.end());
+		return { std::move(bids), std::move(asks) };
+	}
+
+	std::set<OrderID> get_all_user_orders(UserID user_id) const {
+		std::set<OrderID> result;
+		for (const auto& [order_id, it] : bid_map) {
+			if (it->user_id == user_id) {
+				result.insert(order_id);
+			}
+		}
+		for (const auto& [order_id, it] : ask_map) {
+			if (it->user_id == user_id) {
+				result.insert(order_id);
+			}
+		}
+		return result;
+	}
 };
 
-int test_function() {
-    return 42;
-}
+struct Transaction {
+	float price;
+	float volume;
+	UserID buyer_id;
+	UserID seller_id;
+};
+
+struct SimulationStepResult {
+	std::map<SecurityTicker, std::map<OrderID, float>> partially_transacted_orders;
+	std::map<SecurityTicker, std::set<OrderID>> fully_transacted_orders;
+	std::map<SecurityTicker, std::set<OrderID>> cancelled_orders;
+	std::map<SecurityTicker, std::vector<Transaction>> transactions;
+	std::map<SecurityTicker, BookDepth> order_book_depth_per_security;
+	std::map<SecurityTicker, FlatOrderBook> order_book_per_security;
+	std::vector<std::vector<float>> portfolios;
+	std::map<UserID, Username> user_id_to_username_map;
+	uint32_t current_step;
+	bool has_next_step;
+};
+
+class ISecurity;
+
+class ISimulation {
+protected:
+	std::vector<SecurityTicker> tickers = {};
+	std::map<SecurityTicker, SecurityID> ticker_to_id = {};
+	std::map<SecurityTicker, std::shared_ptr<ISecurity>> ticker_to_security = {};
+	std::vector<std::shared_ptr<ISecurity>> securities_vector = {};
+	const float T;
+	const uint32_t N;
+	uint32_t tick = 0;
+	std::map<UserID, Username> user_id_to_username = {};
+protected:
+	std::vector<std::shared_ptr<ISecurity>>& get_securities() noexcept {
+		return securities_vector;
+	}
+	void increment_tick() noexcept {
+		tick += 1;
+	}
+	void reset_tick_to_zero() noexcept {
+		tick = 0;
+	}
+public:
+	explicit ISimulation(
+		const std::map<SecurityTicker, std::shared_ptr<ISecurity>>& securities,
+		float T, uint32_t N
+	) : T{ T }, N{ N } {
+		uint32_t security_id = 0;
+		for (const auto& [ticker, security] : securities) {
+			tickers.push_back(ticker);
+			ticker_to_id.emplace(ticker, security_id);
+			ticker_to_security.emplace(ticker, security);
+			securities_vector.push_back(security);
+			security_id += 1;
+		}
+	}
+	virtual ~ISimulation() = default;
+
+	// Utility methods
+	const std::vector<SecurityTicker>& get_all_tickers() const noexcept {
+		return tickers;
+	};
+	const SecurityTicker& get_security_ticker(SecurityID security_id) const {
+		if (security_id >= tickers.size()) {
+			throw IDNotFoundError(fmt::format("The id `{}` doesn't exist.", security_id));
+		}
+		return tickers.at(security_id);
+	};
+	SecurityID get_security_id(const SecurityTicker& security_ticker) const {
+		const auto it = ticker_to_id.find(security_ticker);
+		if (it == ticker_to_id.end()) {
+			throw IDNotFoundError(fmt::format("The ticker `{}` doesn't exist.", security_ticker));
+		}
+		return it->second;
+	};
+	const std::map<UserID, Username>& get_user_id_to_username() const noexcept {
+		return user_id_to_username;
+	}
+	uint32_t get_securities_count() const noexcept {
+		return securities_vector.size();
+	}
+
+	// Simulation meta information
+	float get_dt() const noexcept {
+		return T / N;
+	};
+	float get_t() const noexcept {
+		return tick * T / N;
+	};
+	float get_T() const noexcept {
+		return T;
+	};
+	uint32_t get_tick() const noexcept {
+		return tick;
+	};
+	uint32_t get_N() const noexcept {
+		return N;
+	};
+
+	// User management
+	virtual UserID add_user(const Username& username) = 0; // May throw
+	virtual uint32_t get_user_count() const noexcept = 0;
+
+	// Simulation order book information
+	virtual const LimitOrder& get_top_bid(SecurityID security_id) const = 0; // May throw
+	virtual const LimitOrder& get_top_ask(SecurityID security_id) const = 0; // May throw
+	virtual uint32_t get_bid_count(SecurityID security_id) const = 0; // May throw
+	virtual uint32_t get_ask_count(SecurityID security_id) const = 0; // May throw
+	virtual FlatOrderBook get_order_book(SecurityID security_id) const = 0; // May throw
+	virtual std::set<OrderID> get_all_open_user_orders(UserID user_id, SecurityID security_id) const = 0; // May throw
+	virtual BookDepth get_cumulative_book_depth(SecurityID security_id) const = 0; // May throw
+
+	// Simulation actions
+	virtual SimulationStepResult do_simulation_step() = 0; // May throw
+	virtual OrderID submit_limit_order(UserID user_id, SecurityID security_id, OrderSide side, float price, float volume) = 0; // May throw
+	virtual void submit_cancel_order(UserID user_id, SecurityID security_id, OrderID order_id) = 0; // May throw
+	virtual void reset_simulation() = 0;
+};
+
+class IPortfolioManager {
+public:
+	virtual std::vector<std::vector<float>> get_portfolio_table() const noexcept = 0;
+	virtual void reset_user_portfolio(UserID user_id) = 0;
+	virtual float add_to_security(UserID user_id, SecurityID security_1, float addition_1) = 0; // May throw
+	virtual FloatPair add_to_two_securities(UserID user_id, SecurityID security_1, float addition_1, SecurityID security_2, float addition_2) = 0; // May throw
+	virtual float multiply_and_add_1_to_2(UserID user_id, SecurityID security_1, SecurityID security_2, float multiply) = 0; // May throw
+	virtual float multiply_and_add_1_to_2_and_set_1(UserID user_id, SecurityID security_1, SecurityID security_2, float multiply, float set_value) = 0; // May throw
+};
+
+class ISecurity {
+public:
+	virtual bool is_tradeable() = 0;
+	virtual void before_step(ISimulation& simulation, IPortfolioManager& portfolio) = 0;
+	virtual void after_step(ISimulation& simulation, IPortfolioManager& portfolio) = 0;
+	virtual void on_simulation_start(ISimulation& simulation, IPortfolioManager& portfolio) = 0;
+	virtual void on_simulation_end(ISimulation& simulation, IPortfolioManager& portfolio) = 0;
+	virtual void on_trade_executed(
+		ISimulation& simulation,
+		IPortfolioManager& portfolio,
+		UserID buyer_id, UserID seller_id, float transacted_price, float transacted_volume
+	) = 0;
+};
+
+class UserAndPortfolioManager : public IPortfolioManager {
+	uint32_t user_count = 0;
+	uint32_t capacity = 0;
+	const uint32_t columns;
+
+	std::unique_ptr<float[]> data = nullptr;
+	mutable std::shared_mutex data_mutex = std::shared_mutex();
+	mutable std::unique_ptr<std::mutex[]> user_mutexes;
+public:
+	explicit UserAndPortfolioManager(const uint32_t columns) : columns{ columns } {}
+
+	const uint32_t get_column_count() const noexcept {
+		return columns;
+	}
+
+	const uint32_t get_user_count() const noexcept {
+		return user_count;
+	}
+
+	UserID register_new_user() noexcept {
+		auto write_lock = std::unique_lock(data_mutex);
+		auto user_id = user_count++;
+
+		if (user_count > capacity) {
+			capacity = std::max(1u, capacity * 2);
+
+			// Resize data buffer
+			auto new_data_ptr = std::make_unique<float[]>(capacity * columns);
+			std::fill(new_data_ptr.get(), new_data_ptr.get() + capacity * columns, 0.0f);
+
+			if (data != nullptr) {
+				std::memcpy(new_data_ptr.get(), data.get(), (user_count - 1) * columns * sizeof(float));
+			}
+			data = std::move(new_data_ptr);
+
+			auto new_mutexes = std::make_unique<std::mutex[]>(capacity);
+			// no need to copy old ones, just replace
+			user_mutexes = std::move(new_mutexes);
+		}
+
+		// Zero out just the new row
+		std::fill(data.get() + user_id * columns, data.get() + (user_id + 1) * columns, 0.0f);
+		return user_id;
+	}
+
+	// Inherited methods
+	std::vector<std::vector<float>> get_portfolio_table() const noexcept override {
+		auto read_lock = std::shared_lock(data_mutex);
+		auto table = std::vector<std::vector<float>>(user_count, std::vector<float>(columns));
+
+		for (UserID user_index = 0; user_index < user_count; user_index++) {
+			std::unique_lock user_lock(user_mutexes[user_index]);
+			std::memcpy(
+				table[user_index].data(),
+				data.get() + user_index * columns,
+				columns * sizeof(float)
+			);
+		}
+
+		return table;
+	}
+
+	void reset_user_portfolio(UserID user_id) override {
+		if (user_id >= user_count) {
+			throw IDNotFoundError(fmt::format("Could not find user with id `{}`.", user_id));
+		}
+		auto read_lock = std::shared_lock(data_mutex);
+		auto user_lock = std::unique_lock(user_mutexes[user_id]);
+
+		std::fill(data.get() + user_id * columns, data.get() + (user_id + 1) * columns, 0.0f);
+	}
+
+	// `security_1 += addition_1`
+	// returns: the new value of the security in the portfolio
+	float add_to_security(UserID user_id, SecurityID security_1, float addition_1) override {
+		if (user_id >= user_count) {
+			throw IDNotFoundError(fmt::format("Could not find user_id: `{}`.", user_id));
+		}
+		if (security_1 >= columns) {
+			throw IDNotFoundError(fmt::format("Could not find security_1: `{}`.", security_1));
+		}
+		auto read_lock = std::shared_lock(data_mutex);
+		auto user_lock = std::unique_lock(user_mutexes[user_id]);
+
+		auto& ref = data[user_id * columns + security_1];
+		ref += addition_1;
+		return ref;
+	}
+
+	// `security_1 += addition_1`, `security_2 += addition_2`
+	// returns: a pair of the new portfolio values
+	FloatPair add_to_two_securities(UserID user_id, SecurityID security_1, float addition_1, SecurityID security_2, float addition_2) override {
+		if (user_id >= user_count) {
+			throw IDNotFoundError(fmt::format("Could not find user_id: `{}`.", user_id));
+		}
+		if (security_1 >= columns) {
+			throw IDNotFoundError(fmt::format("Could not find security_1: `{}`.", security_1));
+		}
+		if (security_2 >= columns) {
+			throw IDNotFoundError(fmt::format("Could not find security_2: `{}`.", security_1));
+		}
+		if (security_1 == security_2) {
+			throw std::runtime_error(fmt::format("Received the same security twice: `{}`", security_1));
+		}
+		auto read_lock = std::shared_lock(data_mutex);
+		auto user_lock = std::unique_lock(user_mutexes[user_id]);
+
+		auto& ref_1 = data[user_id * columns + security_1];
+		ref_1 += addition_1;
+		auto& ref_2 = data[user_id * columns + security_2];
+		ref_2 += addition_2;
+		return { ref_1, ref_2 };
+	}
+
+	// `security_2 += security_1 * multiply`
+	// returns: the new value of security_2
+	float multiply_and_add_1_to_2(UserID user_id, SecurityID security_1, SecurityID security_2, float multiply) override {
+		if (user_id >= user_count) {
+			throw IDNotFoundError(fmt::format("Could not find user_id: `{}`.", user_id));
+		}
+		if (security_1 >= columns) {
+			throw IDNotFoundError(fmt::format("Could not find security_1: `{}`.", security_1));
+		}
+		if (security_2 >= columns) {
+			throw IDNotFoundError(fmt::format("Could not find security_2: `{}`.", security_1));
+		}
+		if (security_1 == security_2) {
+			throw std::runtime_error(fmt::format("Received the same security twice: `{}`", security_1));
+		}
+		auto read_lock = std::shared_lock(data_mutex);
+		auto user_lock = std::unique_lock(user_mutexes[user_id]);
+
+		auto& ref_to_multiply_from = data[user_id * columns + security_1];
+		auto& ref_to_mult_and_add = data[user_id * columns + security_2];
+		ref_to_mult_and_add += ref_to_multiply_from * multiply;
+		return ref_to_mult_and_add;
+	}
+
+	// `security_2 += security_1 * multiply`, then `security_1 = set_value`
+	// returns: the new value of security_2
+	float multiply_and_add_1_to_2_and_set_1(UserID user_id, SecurityID security_1, SecurityID security_2, float multiply, float set_value) override {
+		if (user_id >= user_count) {
+			throw IDNotFoundError(fmt::format("Could not find user_id: `{}`.", user_id));
+		}
+		if (security_1 >= columns) {
+			throw IDNotFoundError(fmt::format("Could not find security_1: `{}`.", security_1));
+		}
+		if (security_2 >= columns) {
+			throw IDNotFoundError(fmt::format("Could not find security_2: `{}`.", security_1));
+		}
+		if (security_1 == security_2) {
+			throw std::runtime_error(fmt::format("Received the same security twice: `{}`", security_1));
+		}
+		auto read_lock = std::shared_lock(data_mutex);
+		auto user_lock = std::unique_lock(user_mutexes[user_id]);
+
+		auto& ref_to_set = data[user_id * columns + security_1];
+		auto& ref_to_mult_and_add = data[user_id * columns + security_2];
+		ref_to_mult_and_add += ref_to_set * multiply;
+		ref_to_set = set_value;
+		return ref_to_mult_and_add;
+	}
+};
+
+class GenericSimulation : public ISimulation {
+	UserAndPortfolioManager user_portfolio_manager;
+	std::vector<OrderBook> order_books = {};
+
+	std::mutex order_queue_mutex = std::mutex();
+	std::map<SecurityID, std::vector<OrderVariant>> submitted_orders = {};
+	OrderID order_id_counter = 0;
+public:
+	explicit GenericSimulation(
+		const std::map<SecurityTicker, std::shared_ptr<ISecurity>>& securities,
+		float T,
+		uint32_t N
+	) : ISimulation(securities, T, N), user_portfolio_manager{ UserAndPortfolioManager(securities.size()) } {
+		for (uint32_t i = 0; i < securities.size(); i++) {
+			order_books.push_back(OrderBook());
+			submitted_orders.emplace(i, std::vector<OrderVariant>());
+		}
+	}
+
+	// User management
+	UserID add_user(const Username& username) override {
+		auto user_id = user_portfolio_manager.register_new_user();
+		user_id_to_username.emplace(user_id, username);
+		return user_id;
+	};
+	uint32_t get_user_count() const noexcept override {
+		return user_portfolio_manager.get_user_count();
+	};
+
+	// Simulation order book information
+	const LimitOrder& get_top_bid(SecurityID security_id) const override {
+		if (order_books.size() <= security_id) {
+			throw IDNotFoundError(fmt::format("Could not find order book with security_id: `{}`.", security_id));
+		}
+		return order_books.at(security_id).top_bid();
+	};
+	const LimitOrder& get_top_ask(SecurityID security_id) const override {
+		if (order_books.size() <= security_id) {
+			throw IDNotFoundError(fmt::format("Could not find order book with security_id: `{}`.", security_id));
+		}
+		return order_books.at(security_id).top_ask();
+	};
+	uint32_t get_bid_count(SecurityID security_id) const override {
+		if (order_books.size() <= security_id) {
+			throw IDNotFoundError(fmt::format("Could not find order book with security_id: `{}`.", security_id));
+		}
+		return order_books.at(security_id).bid_size();
+	};
+	uint32_t get_ask_count(SecurityID security_id) const override {
+		if (order_books.size() <= security_id) {
+			throw IDNotFoundError(fmt::format("Could not find order book with security_id: `{}`.", security_id));
+		}
+		return order_books.at(security_id).ask_size();
+	};
+	FlatOrderBook get_order_book(SecurityID security_id) const override {
+		if (tickers.size() <= security_id) {
+			throw IDNotFoundError(fmt::format("The security_id: `{}` doesn't exist.", security_id));
+		}
+		return order_books.at(security_id).get_limit_orders();
+	};
+	std::set<OrderID> get_all_open_user_orders(UserID user_id, SecurityID security_id) const override {
+		if (user_portfolio_manager.get_user_count() <= user_id) {
+			throw IDNotFoundError(fmt::format("The user_id: `{}` doesn't exist.", user_id));
+		}
+		if (tickers.size() <= security_id) {
+			throw IDNotFoundError(fmt::format("The security_id: `{}` doesn't exist.", security_id));
+		}
+		return order_books.at(security_id).get_all_user_orders(user_id);
+	};
+	BookDepth get_cumulative_book_depth(SecurityID security_id) const override {
+		if (tickers.size() <= security_id) {
+			throw IDNotFoundError(fmt::format("The security_id: `{}` doesn't exist.", security_id));
+		}
+		return order_books.at(security_id).get_book_depth();
+	};
+		
+	// Simulation actions
+	SimulationStepResult do_simulation_step() override {
+		auto submitted_orders_lock = std::unique_lock(order_queue_mutex);
+		// Perform a simulaiton step
+		auto step = get_tick(); // step ∈ [0, ..., N] inclusive
+		if (step > get_N()) {
+			throw std::runtime_error("Passed simulation endpoint!");
+		}
+
+		auto t = get_t(); // t ∈ [0, ..., T]
+		auto dt = get_dt(); // dt = T / N
+
+		if (step == 0) {
+			for (auto& security : get_securities()) {
+				security->on_simulation_start(*this, user_portfolio_manager);
+			}
+		}
+
+		for (auto& security : get_securities()) {
+			security->before_step(*this, user_portfolio_manager);
+		}
+
+		// Keep track of market updates
+		std::map<SecurityTicker, std::map<OrderID, float>> partially_transacted_orders = {}; // ticker -> order_id -> new volume
+		std::map<SecurityTicker, std::set<OrderID>> fully_transacted_orders = {};
+		std::map<SecurityTicker, std::set<OrderID>> cancelled_orders = {};
+		std::map<SecurityTicker, std::vector<Transaction>> transactions = {};
+
+		auto& securities = get_securities();
+		// Here would the command queues normally be
+		for (SecurityID security_id = 0; security_id < get_securities_count(); security_id++) {
+			auto& security_class = securities.at(security_id);
+			auto& order_book = order_books.at(security_id);
+			auto& commands = submitted_orders.at(security_id);
+
+			// Keep track of market updates for a particular security
+			auto local_partially_transacted_orders = std::map<OrderID, float>();
+			auto local_fully_transacted_orders = std::set<OrderID>();
+			auto local_cancelled_orders = std::set<OrderID>();
+			auto local_transactions = std::vector<Transaction>();
+
+			for (auto& variant_command : commands) {
+				auto index = variant_command.index();
+
+				if (index == 0) {
+					{
+						// Invariant: the market must not be crossed before submitting a new order
+						const auto has_orders_on_both_sides = order_book.bid_size() > 0 && order_book.ask_size() > 0;
+						const auto is_market_crossed = has_orders_on_both_sides && (order_book.top_bid().price >= order_book.top_ask().price);
+						assert(!is_market_crossed);
+					}
+
+					LimitOrder& order = std::get<0>(variant_command);
+					// Insert the order
+					order_book.insert_order(order);
+
+					// The order book is now potentially crossed, we must resolve it
+					// additionally, if it was crossed, it is due to the added order, by our invariants
+					while (true) {
+						if (order_book.bid_size() > 0 && order_book.ask_size() > 0) {
+							auto& top_bid = order_book.top_bid();
+							auto& top_ask = order_book.top_ask();
+							if (top_bid.price >= top_ask.price) {
+								// The trades will execute on the submitted order's opposite side.
+								// If the submitted order is a bid, the market is crossed because of it, 
+								// the execution price will be of the ask. And vice-versa if the crossing is ask.
+								auto transacted_price = order.side == OrderSide::BID ? top_ask.price : top_bid.price;
+								auto transacted_volume = std::min(top_bid.volume, top_ask.volume);
+
+								auto buyer_id = top_bid.user_id;
+								auto seller_id = top_ask.user_id;
+
+								auto top_bid_id = top_bid.order_id;
+								auto top_ask_id = top_ask.order_id;
+
+								// After this `top_bid` may be invalidated
+								auto remaining_bid_volume = top_bid.volume - transacted_volume;
+								if (remaining_bid_volume == 0) {
+									local_partially_transacted_orders.erase(top_bid_id);
+									local_fully_transacted_orders.emplace(top_bid_id);
+									order_book.pop_top_bid();
+								}
+								else {
+									top_bid.volume = remaining_bid_volume;
+									local_partially_transacted_orders[top_bid_id] = remaining_bid_volume;
+								}
+
+								// After this `top_ask` may be invalidated
+								auto remaining_ask_volume = top_ask.volume - transacted_volume;
+								if (remaining_ask_volume == 0) {
+									local_partially_transacted_orders.erase(top_ask_id);
+									local_fully_transacted_orders.emplace(top_ask_id);
+									order_book.pop_top_ask();
+								}
+								else {
+									top_ask.volume = remaining_ask_volume;
+									local_partially_transacted_orders[top_ask_id] = remaining_ask_volume;
+								}
+
+								// Perform custom security trade resolution
+								// Must often this is used to simply modify security and cash accounts
+								security_class->on_trade_executed(*this, user_portfolio_manager, buyer_id, seller_id, transacted_price, transacted_volume);
+								local_transactions.push_back(Transaction{ .price = transacted_price, .volume = transacted_volume, .buyer_id = buyer_id, .seller_id = seller_id });
+							}
+							else {
+								break;
+							}
+						}
+						else {
+							break;
+						}
+					}
+
+					{
+						// Invariant: the market must not be crossed after submitting an order and executing it
+						const auto has_orders_on_both_sides = order_book.bid_size() > 0 && order_book.ask_size() > 0;
+						const auto is_market_crossed = has_orders_on_both_sides && (order_book.top_bid().price >= order_book.top_ask().price);
+						assert(!is_market_crossed);
+					}
+				}
+				else if (index == 1) {
+					CancelOrder& order = std::get<1>(variant_command);
+					auto was_cancelled = order_book.cancel_order(order);
+					if (was_cancelled) {
+						local_cancelled_orders.insert(order.order_id);
+					}
+				}
+				else {
+					assert(false);
+				}
+			}
+
+			// Save the differences to a simulation step object
+			const auto& ticker = get_security_ticker(security_id);
+			partially_transacted_orders.emplace(ticker, local_partially_transacted_orders);
+			fully_transacted_orders.emplace(ticker, local_fully_transacted_orders);
+			cancelled_orders.emplace(ticker, local_cancelled_orders);
+			transactions.emplace(ticker, local_transactions);
+
+			// Reset the submitted_order[security_id] vector
+			commands.clear();
+		}
+
+		for (auto& security : get_securities()) {
+			security->after_step(*this, user_portfolio_manager);
+		}
+
+		if (step == N) {
+			for (auto& security : get_securities()) {
+				security->on_simulation_end(*this, user_portfolio_manager);
+			}
+		}
+
+		auto order_book_depth_per_security = std::map<SecurityTicker, BookDepth>();
+		auto order_book_per_security = std::map<SecurityTicker, FlatOrderBook>();
+		for (SecurityID security_id = 0; security_id < get_securities_count(); security_id++) {
+			auto& ticker = get_security_ticker(security_id);
+			order_book_depth_per_security[ticker] = get_cumulative_book_depth(security_id);
+			order_book_per_security[ticker] = get_order_book(security_id);
+		}
+
+		increment_tick();
+		return SimulationStepResult{
+			.partially_transacted_orders = partially_transacted_orders,
+			.fully_transacted_orders = fully_transacted_orders,
+			.cancelled_orders = cancelled_orders,
+			.transactions = transactions,
+			.order_book_depth_per_security = order_book_depth_per_security,
+			.order_book_per_security = order_book_per_security,
+			.portfolios = user_portfolio_manager.get_portfolio_table(),
+			.user_id_to_username_map = get_user_id_to_username(),
+			.current_step = get_tick() - 1,
+			.has_next_step = get_tick() <= get_N()
+		};
+	};
+	OrderID submit_limit_order(UserID user_id, SecurityID security_id, OrderSide side, float price, float volume) override {
+		if (user_id >= get_user_count()) {
+			throw IDNotFoundError(fmt::format("The user_id: `{}` doesn't exist.", user_id));
+		}
+		if (security_id >= get_securities_count()) {
+			throw IDNotFoundError(fmt::format("The security_id: `{}` doesn't exist.", security_id));
+		}
+		auto order_queue_lock = std::unique_lock(order_queue_mutex);
+		auto order_id = order_id_counter++;
+		submitted_orders.at(security_id).push_back(LimitOrder { .user_id = user_id, .order_id = order_id_counter, .side = side, .price = price, .volume = volume });
+		return order_id;
+	};
+	void submit_cancel_order(UserID user_id, SecurityID security_id, OrderID order_id) override {
+		if (user_id >= get_user_count()) {
+			throw IDNotFoundError(fmt::format("The user_id: `{}` doesn't exist.", user_id));
+		}
+		auto order_queue_lock = std::unique_lock(order_queue_mutex);
+		submitted_orders.at(security_id).push_back(CancelOrder{ .user_id = user_id, .order_id = order_id });
+	};
+	void reset_simulation() override {
+		auto order_queue_lock = std::unique_lock(order_queue_mutex);
+		for (auto& [security_id, vec] : submitted_orders) {
+			vec.clear();
+		}
+		for (UserID user_id = 0; user_id < user_portfolio_manager.get_user_count(); user_id++) {
+			user_portfolio_manager.reset_user_portfolio(user_id);
+		}
+		reset_tick_to_zero();
+	};
+};
+
+class PyISecurity : public ISecurity {
+public:
+	using ISecurity::ISecurity;
+
+	bool is_tradeable() override {
+		PYBIND11_OVERRIDE_PURE(bool, ISecurity, is_tradeable);
+	}
+	void before_step(ISimulation& sim, IPortfolioManager& pm) override {
+		PYBIND11_OVERRIDE_PURE(void, ISecurity, before_step, sim, pm);
+	}
+	void after_step(ISimulation& sim, IPortfolioManager& pm) override {
+		PYBIND11_OVERRIDE_PURE(void, ISecurity, after_step, sim, pm);
+	}
+	void on_simulation_start(ISimulation& sim, IPortfolioManager& pm) override {
+		PYBIND11_OVERRIDE_PURE(void, ISecurity, on_simulation_start, sim, pm);
+	}
+	void on_simulation_end(ISimulation& sim, IPortfolioManager& pm) override {
+		PYBIND11_OVERRIDE_PURE(void, ISecurity, on_simulation_end, sim, pm);
+	}
+	void on_trade_executed(ISimulation& sim, IPortfolioManager& pm, UserID b, UserID s, float p, float v) override {
+		PYBIND11_OVERRIDE_PURE(void, ISecurity, on_trade_executed, sim, pm, b, s, p, v);
+	}
+};
+
+class PyIPortfolioManager : public IPortfolioManager {
+public:
+	using IPortfolioManager::IPortfolioManager;
+
+	std::vector<std::vector<float>> get_portfolio_table() const noexcept override {
+		PYBIND11_OVERRIDE_PURE(std::vector<std::vector<float>>, IPortfolioManager, get_portfolio_table);
+	}
+	void reset_user_portfolio(UserID uid) override {
+		PYBIND11_OVERRIDE_PURE(void, IPortfolioManager, reset_user_portfolio, uid);
+	}
+	float add_to_security(UserID uid, SecurityID sid1, float add1) override {
+		PYBIND11_OVERRIDE_PURE(float, IPortfolioManager, add_to_security, uid, sid1, add1);
+	}
+	FloatPair add_to_two_securities(UserID uid, SecurityID s1, float a1, SecurityID s2, float a2) override {
+		PYBIND11_OVERRIDE_PURE(FloatPair, IPortfolioManager, add_to_two_securities, uid, s1, a1, s2, a2);
+	}
+	float multiply_and_add_1_to_2(UserID uid, SecurityID s1, SecurityID s2, float mult) override {
+		PYBIND11_OVERRIDE_PURE(float, IPortfolioManager, multiply_and_add_1_to_2, uid, s1, s2, mult);
+	}
+	float multiply_and_add_1_to_2_and_set_1(UserID uid, SecurityID s1, SecurityID s2, float m, float v) override {
+		PYBIND11_OVERRIDE_PURE(float, IPortfolioManager, multiply_and_add_1_to_2_and_set_1, uid, s1, s2, m, v);
+	}
+};
+
+class PyISimulation : public ISimulation {
+public:
+	using ISimulation::ISimulation;
+
+	UserID add_user(const Username& name) override {
+		PYBIND11_OVERRIDE_PURE(UserID, ISimulation, add_user, name);
+	}
+	uint32_t get_user_count() const noexcept override {
+		PYBIND11_OVERRIDE_PURE(uint32_t, ISimulation, get_user_count);
+	}
+	const LimitOrder& get_top_bid(SecurityID sid) const override {
+		PYBIND11_OVERRIDE_PURE(const LimitOrder&, ISimulation, get_top_bid, sid);
+	}
+	const LimitOrder& get_top_ask(SecurityID sid) const override {
+		PYBIND11_OVERRIDE_PURE(const LimitOrder&, ISimulation, get_top_ask, sid);
+	}
+	uint32_t get_bid_count(SecurityID sid) const override {
+		PYBIND11_OVERRIDE_PURE(uint32_t, ISimulation, get_bid_count, sid);
+	}
+	uint32_t get_ask_count(SecurityID sid) const override {
+		PYBIND11_OVERRIDE_PURE(uint32_t, ISimulation, get_ask_count, sid);
+	}
+	FlatOrderBook get_order_book(SecurityID sid) const override {
+		PYBIND11_OVERRIDE_PURE(FlatOrderBook, ISimulation, get_order_book, sid);
+	}
+	std::set<OrderID> get_all_open_user_orders(UserID uid, SecurityID sid) const override {
+		PYBIND11_OVERRIDE_PURE(std::set<OrderID>, ISimulation, get_all_open_user_orders, uid, sid);
+	}
+	BookDepth get_cumulative_book_depth(SecurityID sid) const override {
+		PYBIND11_OVERRIDE_PURE(BookDepth, ISimulation, get_cumulative_book_depth, sid);
+	}
+	SimulationStepResult do_simulation_step() override {
+		PYBIND11_OVERRIDE_PURE(SimulationStepResult, ISimulation, do_simulation_step);
+	}
+	OrderID submit_limit_order(UserID uid, SecurityID sid, OrderSide s, float p, float v) override {
+		PYBIND11_OVERRIDE_PURE(OrderID, ISimulation, submit_limit_order, uid, sid, s, p, v);
+	}
+	void submit_cancel_order(UserID uid, SecurityID sid, OrderID oid) override {
+		PYBIND11_OVERRIDE_PURE(void, ISimulation, submit_cancel_order, uid, sid, oid);
+	}
+	void reset_simulation() override {
+		PYBIND11_OVERRIDE_PURE(void, ISimulation, reset_simulation);
+	}
+};
 
 PYBIND11_MODULE(Server, m) {
-    m.doc() = "Example pybind11 module";
+	py::enum_<OrderSide>(m, "OrderSide")
+		.value("BID", OrderSide::BID)
+		.value("ASK", OrderSide::ASK)
+		.export_values();
 
-    m.def("test_function", &test_function, "Returns the meaning of life.");
+	py::class_<LimitOrder>(m, "LimitOrder")
+		.def(py::init<>())
+		.def_readwrite("user_id", &LimitOrder::user_id)
+		.def_readwrite("order_id", &LimitOrder::order_id)
+		.def_readwrite("side", &LimitOrder::side)
+		.def_readwrite("price", &LimitOrder::price)
+		.def_readwrite("volume", &LimitOrder::volume);
 
-    py::enum_<Server::OrderSide>(m, "OrderSide")
-        .value("BID", Server::OrderSide::BID)
-        .value("ASK", Server::OrderSide::ASK)
-        .export_values();
+	py::class_<CancelOrder>(m, "CancelOrder")
+		.def(py::init<>())
+		.def_readwrite("user_id", &CancelOrder::user_id)
+		.def_readwrite("order_id", &CancelOrder::order_id);
 
-    py::class_<Server::LimitOrder>(m, "LimitOrder")
-        .def_readonly("user_id", &Server::LimitOrder::user_id)
-        .def_readonly("order_id", &Server::LimitOrder::order_id)
-        .def_readonly("side", &Server::LimitOrder::side)
-        .def_readonly("price", &Server::LimitOrder::price)
-        .def_readonly("volume", &Server::LimitOrder::volume);
+	py::class_<Transaction>(m, "Transaction")
+		.def_readwrite("price", &Transaction::price)
+		.def_readwrite("volume", &Transaction::volume)
+		.def_readwrite("buyer_id", &Transaction::buyer_id)
+		.def_readwrite("seller_id", &Transaction::seller_id);
 
-    py::class_<Server::Transaction>(m, "Transaction")
-        .def(py::init<>())
-        .def_readwrite("price", &Server::Transaction::price)
-        .def_readwrite("volume", &Server::Transaction::volume)
-        .def_readwrite("buyer_id", &Server::Transaction::buyer_id)
-        .def_readwrite("seller_id", &Server::Transaction::seller_id);
+	py::bind_vector<std::vector<LimitOrder>>(m, "LimitOrderList");
+	py::bind_map<std::map<float, float>>(m, "PriceDepthMap");
 
-    py::class_<Server::Simulation::SimulationStepResult>(m, "SimulationStepResult")
-        .def(py::init<>())
-        .def_readwrite("partially_transacted_orders", &Server::Simulation::SimulationStepResult::partially_transacted_orders)
-        .def_readwrite("fully_transacted_orders", &Server::Simulation::SimulationStepResult::fully_transacted_orders)
-        .def_readwrite("cancelled_orders", &Server::Simulation::SimulationStepResult::cancelled_orders)
-        .def_readwrite("transactions", &Server::Simulation::SimulationStepResult::transactions)
-        .def_readwrite("order_book_depth_per_security", &Server::Simulation::SimulationStepResult::order_book_depth_per_security)
-        .def_readwrite("order_book_per_security", &Server::Simulation::SimulationStepResult::order_book_per_security)
-        .def_readwrite("portfolios", &Server::Simulation::SimulationStepResult::portfolios)
-        .def_readwrite("user_id_to_username_map", &Server::Simulation::SimulationStepResult::user_id_to_username_map)
-        .def_readwrite("current_step", &Server::Simulation::SimulationStepResult::current_step)
-        .def_readwrite("has_next_step", &Server::Simulation::SimulationStepResult::has_next_step)
-        .def("to_dict", [](const Server::Simulation::SimulationStepResult& self) {
-            py::dict d;
-            d["current_step"] = self.current_step;
-            d["has_next_step"] = self.has_next_step;
-            d["transactions"] = self.transactions;
-            d["partially_transacted_orders"] = self.partially_transacted_orders;
-            d["fully_transacted_orders"] = self.fully_transacted_orders;
-            d["cancelled_orders"] = self.cancelled_orders;
-            d["order_book_depth_per_security"] = self.order_book_depth_per_security;
-            d["order_book_per_security"] = self.order_book_per_security;
-            d["portfolios"] = self.portfolios;
-            d["user_id_to_username_map"] = self.user_id_to_username_map;
-            return d;
-        });
+	py::class_<SimulationStepResult>(m, "SimulationStepResult")
+		.def_readwrite("partially_transacted_orders", &SimulationStepResult::partially_transacted_orders)
+		.def_readwrite("fully_transacted_orders", &SimulationStepResult::fully_transacted_orders)
+		.def_readwrite("cancelled_orders", &SimulationStepResult::cancelled_orders)
+		.def_readwrite("transactions", &SimulationStepResult::transactions)
+		.def_readwrite("order_book_depth_per_security", &SimulationStepResult::order_book_depth_per_security)
+		.def_readwrite("order_book_per_security", &SimulationStepResult::order_book_per_security)
+		.def_readwrite("portfolios", &SimulationStepResult::portfolios)
+		.def_readwrite("user_id_to_username_map", &SimulationStepResult::user_id_to_username_map)
+		.def_readwrite("current_step", &SimulationStepResult::current_step)
+		.def_readwrite("has_next_step", &SimulationStepResult::has_next_step);
 
-    py::class_<Server::ISecurity, PyISecurity, std::shared_ptr<Server::ISecurity>>(m, "ISecurity")
-        .def(py::init<>())
-        .def("is_tradeable", &Server::ISecurity::is_tradeable)
-        .def("before_step", &Server::ISecurity::before_step)
-        .def("after_step", &Server::ISecurity::after_step)
-        .def("on_simulation_start", &Server::ISecurity::on_simulation_start)
-        .def("on_simulation_end", &Server::ISecurity::on_simulation_end)
-        .def("on_trade_executed", &Server::ISecurity::on_trade_executed);
+	py::class_<ISecurity, PyISecurity, std::shared_ptr<ISecurity>>(m, "ISecurity")
+		.def(py::init<>());
 
-    py::class_<Server::OrderBook>(m, "OrderBook")
-        .def("bid_size", &Server::OrderBook::bid_size)
-        .def("ask_size", &Server::OrderBook::ask_size)
-        .def("get_book_depth", &Server::OrderBook::get_book_depth)
-        .def("get_limit_orders", &Server::OrderBook::get_limit_orders)
-        .def("get_all_user_orders", &Server::OrderBook::get_all_user_orders)
-        .def("top_bid", &Server::OrderBook::top_bid)
-        .def("top_ask", &Server::OrderBook::top_ask);
+	py::class_<IPortfolioManager, PyIPortfolioManager, std::shared_ptr<IPortfolioManager>>(m, "IPortfolioManager")
+		.def(py::init<>());
 
-    py::class_<Server::Simulation, std::shared_ptr<Server::Simulation>>(m, "Simulation")
-        .def(py::init<std::map<Server::SecurityTicker, std::shared_ptr<Server::ISecurity>>&&, uint32_t, float>(),
-            py::arg("ticker_to_security"), py::arg("N"), py::arg("T"))
-        .def("add_user", &Server::Simulation::add_user)
-        .def("get_all_tickers", &Server::Simulation::get_all_tickers)
-        .def("get_security_ticker", &Server::Simulation::get_security_ticker)
-        .def("get_security_id", &Server::Simulation::get_security_id)
-        .def("get_order_book", &Server::Simulation::get_order_book)
-        .def("get_dt", &Server::Simulation::get_dt)
-        .def("get_t", &Server::Simulation::get_t)
-        .def("get_current_step", &Server::Simulation::get_current_step)
-        .def("get_N", &Server::Simulation::get_N)
-        .def("reset_simulation", &Server::Simulation::reset_simulation)
-        .def("submit_limit_order", &Server::Simulation::submit_limit_order,
-            py::arg("user_id"), py::arg("security"), py::arg("side"), py::arg("price"), py::arg("volume"))
-        .def("submit_cancel_order", &Server::Simulation::submit_cancel_order,
-            py::arg("user_id"), py::arg("security"), py::arg("order_id"))
-        .def("do_simulation_step", &Server::Simulation::do_simulation_step);
+	py::class_<ISimulation, PyISimulation, std::shared_ptr<ISimulation>>(m, "ISimulation")
+		.def(py::init<const std::map<SecurityTicker, std::shared_ptr<ISecurity>>&, float, uint32_t>())
+		.def("get_all_tickers", &ISimulation::get_all_tickers)
+		.def("get_security_ticker", &ISimulation::get_security_ticker)
+		.def("get_security_id", &ISimulation::get_security_id)
+		.def("get_user_id_to_username", &ISimulation::get_user_id_to_username)
+		.def("get_securities_count", &ISimulation::get_securities_count)
+		.def("get_dt", &ISimulation::get_dt)
+		.def("get_t", &ISimulation::get_t)
+		.def("get_T", &ISimulation::get_T)
+		.def("get_tick", &ISimulation::get_tick)
+		.def("get_N", &ISimulation::get_N);
+
+	py::class_<GenericSimulation, ISimulation, std::shared_ptr<GenericSimulation>>(m, "GenericSimulation")
+		.def(py::init<const std::map<SecurityTicker, std::shared_ptr<ISecurity>>&, float, uint32_t>());
 }
