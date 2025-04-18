@@ -226,6 +226,10 @@ namespace Server {
             return ask_orders.size();
         }
 
+        bool has_order(OrderID order_id) {
+            return bid_map.find(order_id) != bid_map.end() || ask_map.find(order_id) != ask_map.end();
+        }
+
         bool insert_order(const LimitOrder& order) {
             if (order.side == BID) {
                 auto [it, inserted] = bid_orders.insert(order);
@@ -287,13 +291,17 @@ namespace Server {
             std::map<float, float> ask_depth;
 
             // For bids, accumulate by descending price
+            float accumulated_bid_depth = 0.0f;
             for (const auto& order : bid_orders) {
-                bid_depth[order.price] += order.volume;
+                accumulated_bid_depth += order.volume;
+                bid_depth[order.price] = accumulated_bid_depth;
             }
 
             // For asks, accumulate by ascending price
+            float accumulated_ask_depth = 0.0f;
             for (const auto& order : ask_orders) {
-                ask_depth[order.price] += order.volume;
+                accumulated_ask_depth += order.volume;
+                ask_depth[order.price] = accumulated_ask_depth;
             }
 
             return { bid_depth, ask_depth };
@@ -350,6 +358,10 @@ namespace Server {
         std::vector<SecurityTicker> security_tickers = {};
         std::vector<OrderBook> order_books = {};
         std::map<UserID, Username> user_id_to_username = {};
+
+        std::mutex order_queue_mutex = std::mutex();
+        uint32_t order_id_counter = 0;
+        std::map<SecurityID, std::vector<CommandVariant>> submitted_orders = {};
     public:
         explicit Simulation(
             std::map<SecurityTicker, std::shared_ptr<ISecurity>>&& ticker_to_security,
@@ -360,6 +372,7 @@ namespace Server {
             for (const auto& [ticker, security] : this->ticker_to_security) {
                 id_to_ticker.emplace(security_id, ticker);
                 id_to_security.emplace(security_id, security);
+                submitted_orders.emplace(security_id, std::vector<CommandVariant>());
 
                 securities.push_back(security);
                 security_ids.push_back(security_id);
@@ -446,6 +459,11 @@ namespace Server {
 
         // Doesn't remove users, only resets their portfolios
         void reset_simulation() {
+            auto order_queue_lock = std::unique_lock(order_queue_mutex);
+            for (auto& [security_id, vec] : submitted_orders) {
+                vec.clear();
+            }
+
             auto user_table = get_user_table();
             for (UserID user_id = 0; user_id < user_table->get_user_count(); user_id++) {
                 user_table->reset_user_position(user_id);
@@ -453,6 +471,22 @@ namespace Server {
             current_step = 0;
         }
 
+        OrderID submit_limit_order(UserID user_id, SecurityID security, OrderSide side, float price, float volume) {
+            assert(user_id < user_table->get_user_count());
+            assert(security < security_tickers.size());
+            assert(submitted_orders.find(security) != submitted_orders.end());
+            auto order_queue_lock = std::unique_lock(order_queue_mutex);
+            auto order_id = order_id_counter++;
+            submitted_orders[security].push_back(LimitOrder{ .user_id = user_id, .order_id = order_id_counter, .side = side, .price = price, .volume = volume });
+            return order_id;
+        }
+
+        void submit_cancel_order(UserID user_id, SecurityID security, OrderID order_id) {
+            assert(user_id < user_table->get_user_count());
+            assert(submitted_orders.find(security) != submitted_orders.end());
+            auto order_queue_lock = std::unique_lock(order_queue_mutex);
+            submitted_orders[security].push_back(CancelOrder{ .user_id = user_id, .order_id = order_id });
+        }
 
         struct SimulationStepResult {
             std::map<SecurityTicker, std::map<OrderID, float>> partially_transacted_orders;
@@ -466,7 +500,8 @@ namespace Server {
             uint32_t current_step;
             bool has_next_step;
         };
-        SimulationStepResult do_simulation_step(std::map<SecurityID, std::deque<CommandVariant>>& queues) {
+        SimulationStepResult do_simulation_step() {
+            auto submitted_orders_lock = std::unique_lock(order_queue_mutex);
             // Perform a simulaiton step
             auto step = get_current_step(); // step ∈ [0, ..., N] inclusive
             if (step > get_N()) {
@@ -496,13 +531,13 @@ namespace Server {
 
             // Here would the command queues normally be
             for (auto security_id : get_security_ids()) {
-                if (queues.find(security_id) == queues.end()) {
+                if (submitted_orders.find(security_id) == submitted_orders.end()) {
                     std::cout << "This security didn't have a queue! Fix this!\n";
                     continue;
                 }
                 auto& security_class = get_security(security_id);
                 auto& order_book = get_order_book(security_id);
-                auto& commands = queues.at(security_id);
+                auto& commands = submitted_orders.at(security_id);
 
                 // Keep track of market updates for a particular security
                 auto local_partially_transacted_orders = std::map<OrderID, float>();
@@ -510,8 +545,7 @@ namespace Server {
                 auto local_cancelled_orders = std::set<OrderID>();
                 auto local_transactions = std::vector<Transaction>();
 
-                while (!commands.empty()) {
-                    auto& variant_command = commands.front();
+                for (auto& variant_command : commands) {
                     auto index = variant_command.index();
 
                     if (index == 0) {
@@ -596,19 +630,24 @@ namespace Server {
                         if (was_cancelled) {
                             local_cancelled_orders.insert(order.order_id);
                         }
+                        if (order_book.has_order(order.order_id)) {
+                            throw std::runtime_error("Order should have been removed!");
+                        }
                     }
                     else {
                         assert(false);
                     }
-                    commands.pop_front();
                 }
 
                 // Save the differences to a simulation step object
                 const auto& ticker = get_security_ticker(security_id);
-                partially_transacted_orders.emplace(ticker, std::move(local_partially_transacted_orders));
-                fully_transacted_orders.emplace(ticker, std::move(local_fully_transacted_orders));
-                cancelled_orders.emplace(ticker, std::move(local_cancelled_orders));
-                transactions.emplace(ticker, std::move(local_transactions));
+                partially_transacted_orders.emplace(ticker, local_partially_transacted_orders);
+                fully_transacted_orders.emplace(ticker, local_fully_transacted_orders);
+                cancelled_orders.emplace(ticker, local_cancelled_orders);
+                transactions.emplace(ticker, local_transactions);
+            
+                // Reset the submitted_order[security_id] vector
+                commands.clear();
             }
 
             for (auto& security : get_securities()) {
@@ -628,7 +667,7 @@ namespace Server {
             for (auto security_id : get_security_ids()) {
                 const auto& ticker = get_security_ticker(security_id);
                 const auto& order_book = get_order_book(security_id);
-                order_book_depth_per_security[ticker] = std::move(order_book.get_book_depth());
+                order_book_depth_per_security[ticker] = order_book.get_book_depth();
                 order_book_per_security[ticker] = order_book.get_limit_orders();
             }
 
@@ -640,13 +679,13 @@ namespace Server {
             increment_step();
             assert(get_current_step() > 0);
             return SimulationStepResult{
-                .partially_transacted_orders = std::move(partially_transacted_orders),
-                .fully_transacted_orders = std::move(fully_transacted_orders),
-                .cancelled_orders = std::move(cancelled_orders),
-                .transactions = std::move(transactions),
-                .order_book_depth_per_security = std::move(order_book_depth_per_security),
-                .order_book_per_security = std::move(order_book_per_security),
-                .portfolios = std::move(portfolios),
+                .partially_transacted_orders = partially_transacted_orders,
+                .fully_transacted_orders = fully_transacted_orders,
+                .cancelled_orders = cancelled_orders,
+                .transactions = transactions,
+                .order_book_depth_per_security = order_book_depth_per_security,
+                .order_book_per_security = order_book_per_security,
+                .portfolios = portfolios,
                 .user_id_to_username_map = user_id_to_username_map,
                 .current_step = get_current_step() - 1,
                 .has_next_step = get_current_step() <= get_N()
@@ -869,51 +908,27 @@ int test_function() {
 
 PYBIND11_MODULE(Server, m) {
     m.doc() = "Example pybind11 module";
+
     m.def("test_function", &test_function, "Returns the meaning of life.");
 
-    // --- Expose OrderSide enum ---
     py::enum_<Server::OrderSide>(m, "OrderSide")
         .value("BID", Server::OrderSide::BID)
         .value("ASK", Server::OrderSide::ASK)
         .export_values();
 
-    // --- Expose LimitOrder ---
     py::class_<Server::LimitOrder>(m, "LimitOrder")
-        .def(py::init<>())  // Keep default constructor
-        .def(py::init<Server::UserID, Server::OrderID, Server::OrderSide, float, float>(),
-            py::arg("user_id"), py::arg("order_id"), py::arg("side"), py::arg("price"), py::arg("volume"))
-        .def_readwrite("user_id", &Server::LimitOrder::user_id)
-        .def_readwrite("order_id", &Server::LimitOrder::order_id)
-        .def_readwrite("side", &Server::LimitOrder::side)
-        .def_readwrite("price", &Server::LimitOrder::price)
-        .def_readwrite("volume", &Server::LimitOrder::volume);
+        .def_readonly("user_id", &Server::LimitOrder::user_id)
+        .def_readonly("order_id", &Server::LimitOrder::order_id)
+        .def_readonly("side", &Server::LimitOrder::side)
+        .def_readonly("price", &Server::LimitOrder::price)
+        .def_readonly("volume", &Server::LimitOrder::volume);
 
-
-    // --- Expose CancelOrder ---
-    py::class_<Server::CancelOrder>(m, "CancelOrder")
-        .def(py::init<>())
-        .def(py::init<Server::UserID, Server::OrderID>(),
-            py::arg("user_id"), py::arg("order_id"))
-        .def_readwrite("user_id", &Server::CancelOrder::user_id)
-        .def_readwrite("order_id", &Server::CancelOrder::order_id);
-
-
-    // --- Expose Transaction ---
     py::class_<Server::Transaction>(m, "Transaction")
         .def(py::init<>())
         .def_readwrite("price", &Server::Transaction::price)
         .def_readwrite("volume", &Server::Transaction::volume)
         .def_readwrite("buyer_id", &Server::Transaction::buyer_id)
         .def_readwrite("seller_id", &Server::Transaction::seller_id);
-
-    // --- Expose CommandVariant ---
-    // With stl_variant support, pybind11 can convert between the variant types.
-    // Additionally, we set an alias using a Python Union from the typing module.
-    m.attr("CommandVariant") =
-        py::module::import("typing").attr("Union")[
-            py::type::of<Server::LimitOrder>(),
-                py::type::of<Server::CancelOrder>()
-        ];
 
     py::class_<Server::Simulation::SimulationStepResult>(m, "SimulationStepResult")
         .def(py::init<>())
@@ -926,9 +941,22 @@ PYBIND11_MODULE(Server, m) {
         .def_readwrite("portfolios", &Server::Simulation::SimulationStepResult::portfolios)
         .def_readwrite("user_id_to_username_map", &Server::Simulation::SimulationStepResult::user_id_to_username_map)
         .def_readwrite("current_step", &Server::Simulation::SimulationStepResult::current_step)
-        .def_readwrite("has_next_step", &Server::Simulation::SimulationStepResult::has_next_step);
+        .def_readwrite("has_next_step", &Server::Simulation::SimulationStepResult::has_next_step)
+        .def("to_dict", [](const Server::Simulation::SimulationStepResult& self) {
+            py::dict d;
+            d["current_step"] = self.current_step;
+            d["has_next_step"] = self.has_next_step;
+            d["transactions"] = self.transactions;
+            d["partially_transacted_orders"] = self.partially_transacted_orders;
+            d["fully_transacted_orders"] = self.fully_transacted_orders;
+            d["cancelled_orders"] = self.cancelled_orders;
+            d["order_book_depth_per_security"] = self.order_book_depth_per_security;
+            d["order_book_per_security"] = self.order_book_per_security;
+            d["portfolios"] = self.portfolios;
+            d["user_id_to_username_map"] = self.user_id_to_username_map;
+            return d;
+        });
 
-    // --- Expose ISecurity (as abstract base) ---
     py::class_<Server::ISecurity, PyISecurity, std::shared_ptr<Server::ISecurity>>(m, "ISecurity")
         .def(py::init<>())
         .def("is_tradeable", &Server::ISecurity::is_tradeable)
@@ -938,8 +966,15 @@ PYBIND11_MODULE(Server, m) {
         .def("on_simulation_end", &Server::ISecurity::on_simulation_end)
         .def("on_trade_executed", &Server::ISecurity::on_trade_executed);
 
-    // --- Expose Simulation ---
-    // Note: We use std::shared_ptr as our holder type.
+    py::class_<Server::OrderBook>(m, "OrderBook")
+        .def("bid_size", &Server::OrderBook::bid_size)
+        .def("ask_size", &Server::OrderBook::ask_size)
+        .def("get_book_depth", &Server::OrderBook::get_book_depth)
+        .def("get_limit_orders", &Server::OrderBook::get_limit_orders)
+        .def("get_all_user_orders", &Server::OrderBook::get_all_user_orders)
+        .def("top_bid", &Server::OrderBook::top_bid)
+        .def("top_ask", &Server::OrderBook::top_ask);
+
     py::class_<Server::Simulation, std::shared_ptr<Server::Simulation>>(m, "Simulation")
         .def(py::init<std::map<Server::SecurityTicker, std::shared_ptr<Server::ISecurity>>&&, uint32_t, float>(),
             py::arg("ticker_to_security"), py::arg("N"), py::arg("T"))
@@ -947,12 +982,15 @@ PYBIND11_MODULE(Server, m) {
         .def("get_all_tickers", &Server::Simulation::get_all_tickers)
         .def("get_security_ticker", &Server::Simulation::get_security_ticker)
         .def("get_security_id", &Server::Simulation::get_security_id)
-        // Expose other public methods as needed:
         .def("get_order_book", &Server::Simulation::get_order_book)
         .def("get_dt", &Server::Simulation::get_dt)
         .def("get_t", &Server::Simulation::get_t)
         .def("get_current_step", &Server::Simulation::get_current_step)
         .def("get_N", &Server::Simulation::get_N)
         .def("reset_simulation", &Server::Simulation::reset_simulation)
+        .def("submit_limit_order", &Server::Simulation::submit_limit_order,
+            py::arg("user_id"), py::arg("security"), py::arg("side"), py::arg("price"), py::arg("volume"))
+        .def("submit_cancel_order", &Server::Simulation::submit_cancel_order,
+            py::arg("user_id"), py::arg("security"), py::arg("order_id"))
         .def("do_simulation_step", &Server::Simulation::do_simulation_step);
 }
