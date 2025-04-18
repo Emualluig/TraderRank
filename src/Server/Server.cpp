@@ -443,13 +443,13 @@ public:
 class ISecurity {
 public:
 	virtual bool is_tradeable() = 0;
-	virtual void before_step(ISimulation& simulation, IPortfolioManager& portfolio) = 0;
-	virtual void after_step(ISimulation& simulation, IPortfolioManager& portfolio) = 0;
-	virtual void on_simulation_start(ISimulation& simulation, IPortfolioManager& portfolio) = 0;
-	virtual void on_simulation_end(ISimulation& simulation, IPortfolioManager& portfolio) = 0;
+	virtual void before_step(ISimulation& simulation, std::shared_ptr<IPortfolioManager> portfolio) = 0;
+	virtual void after_step(ISimulation& simulation, std::shared_ptr<IPortfolioManager> portfolio) = 0;
+	virtual void on_simulation_start(ISimulation& simulation, std::shared_ptr<IPortfolioManager> portfolio) = 0;
+	virtual void on_simulation_end(ISimulation& simulation, std::shared_ptr<IPortfolioManager> portfolio) = 0;
 	virtual void on_trade_executed(
 		ISimulation& simulation,
-		IPortfolioManager& portfolio,
+		std::shared_ptr<IPortfolioManager> portfolio,
 		UserID buyer_id, UserID seller_id, float transacted_price, float transacted_volume
 	) = 0;
 };
@@ -619,7 +619,7 @@ public:
 };
 
 class GenericSimulation : public ISimulation {
-	UserAndPortfolioManager user_portfolio_manager;
+	std::shared_ptr<UserAndPortfolioManager> user_portfolio_manager;
 	std::vector<OrderBook> order_books = {};
 
 	std::mutex order_queue_mutex = std::mutex();
@@ -630,21 +630,22 @@ public:
 		const std::map<SecurityTicker, std::shared_ptr<ISecurity>>& securities,
 		float T,
 		uint32_t N
-	) : ISimulation(securities, T, N), user_portfolio_manager{ UserAndPortfolioManager(securities.size()) } {
+	) : ISimulation(securities, T, N) {
 		for (uint32_t i = 0; i < securities.size(); i++) {
 			order_books.push_back(OrderBook());
 			submitted_orders.emplace(i, std::vector<OrderVariant>());
 		}
+		user_portfolio_manager = std::make_shared<UserAndPortfolioManager>((uint32_t)securities.size());
 	}
 
 	// User management
 	UserID add_user(const Username& username) override {
-		auto user_id = user_portfolio_manager.register_new_user();
+		auto user_id = user_portfolio_manager->register_new_user();
 		user_id_to_username.emplace(user_id, username);
 		return user_id;
 	};
 	uint32_t get_user_count() const noexcept override {
-		return user_portfolio_manager.get_user_count();
+		return user_portfolio_manager->get_user_count();
 	};
 
 	// Simulation order book information
@@ -679,7 +680,7 @@ public:
 		return order_books.at(security_id).get_limit_orders();
 	};
 	std::set<OrderID> get_all_open_user_orders(UserID user_id, SecurityID security_id) const override {
-		if (user_portfolio_manager.get_user_count() <= user_id) {
+		if (user_portfolio_manager->get_user_count() <= user_id) {
 			throw IDNotFoundError(fmt::format("The user_id: `{}` doesn't exist.", user_id));
 		}
 		if (tickers.size() <= security_id) {
@@ -863,7 +864,7 @@ public:
 			.transactions = transactions,
 			.order_book_depth_per_security = order_book_depth_per_security,
 			.order_book_per_security = order_book_per_security,
-			.portfolios = user_portfolio_manager.get_portfolio_table(),
+			.portfolios = user_portfolio_manager->get_portfolio_table(),
 			.user_id_to_username_map = get_user_id_to_username(),
 			.current_step = get_tick() - 1,
 			.has_next_step = get_tick() <= get_N()
@@ -893,8 +894,8 @@ public:
 		for (auto& [security_id, vec] : submitted_orders) {
 			vec.clear();
 		}
-		for (UserID user_id = 0; user_id < user_portfolio_manager.get_user_count(); user_id++) {
-			user_portfolio_manager.reset_user_portfolio(user_id);
+		for (UserID user_id = 0; user_id < user_portfolio_manager->get_user_count(); user_id++) {
+			user_portfolio_manager->reset_user_portfolio(user_id);
 		}
 		reset_tick_to_zero();
 	};
@@ -907,19 +908,19 @@ public:
 	bool is_tradeable() override {
 		PYBIND11_OVERRIDE_PURE(bool, ISecurity, is_tradeable);
 	}
-	void before_step(ISimulation& sim, IPortfolioManager& pm) override {
+	void before_step(ISimulation& sim, std::shared_ptr<IPortfolioManager> pm) override {
 		PYBIND11_OVERRIDE_PURE(void, ISecurity, before_step, sim, pm);
 	}
-	void after_step(ISimulation& sim, IPortfolioManager& pm) override {
+	void after_step(ISimulation& sim, std::shared_ptr<IPortfolioManager> pm) override {
 		PYBIND11_OVERRIDE_PURE(void, ISecurity, after_step, sim, pm);
 	}
-	void on_simulation_start(ISimulation& sim, IPortfolioManager& pm) override {
+	void on_simulation_start(ISimulation& sim, std::shared_ptr<IPortfolioManager> pm) override {
 		PYBIND11_OVERRIDE_PURE(void, ISecurity, on_simulation_start, sim, pm);
 	}
-	void on_simulation_end(ISimulation& sim, IPortfolioManager& pm) override {
+	void on_simulation_end(ISimulation& sim, std::shared_ptr<IPortfolioManager> pm) override {
 		PYBIND11_OVERRIDE_PURE(void, ISecurity, on_simulation_end, sim, pm);
 	}
-	void on_trade_executed(ISimulation& sim, IPortfolioManager& pm, UserID b, UserID s, float p, float v) override {
+	void on_trade_executed(ISimulation& sim, std::shared_ptr<IPortfolioManager> pm, UserID b, UserID s, float p, float v) override {
 		PYBIND11_OVERRIDE_PURE(void, ISecurity, on_trade_executed, sim, pm, b, s, p, v);
 	}
 };
@@ -1034,23 +1035,54 @@ PYBIND11_MODULE(Server, m) {
 		.def_readwrite("has_next_step", &SimulationStepResult::has_next_step);
 
 	py::class_<ISecurity, PyISecurity, std::shared_ptr<ISecurity>>(m, "ISecurity")
-		.def(py::init<>());
+		.def(py::init<>())
+		.def("is_tradeable", &ISecurity::is_tradeable)
+		.def("before_step", &ISecurity::before_step, py::arg("simulation"), py::arg("portfolio"))
+		.def("after_step", &ISecurity::after_step, py::arg("simulation"), py::arg("portfolio"))
+		.def("on_simulation_start", &ISecurity::on_simulation_start, py::arg("simulation"), py::arg("portfolio"))
+		.def("on_simulation_end", &ISecurity::on_simulation_end, py::arg("simulation"), py::arg("portfolio"))
+		.def("on_trade_executed", &ISecurity::on_trade_executed,
+			py::arg("simulation"), py::arg("portfolio"), py::arg("buyer_id"),
+			py::arg("seller_id"), py::arg("transacted_price"), py::arg("transacted_volume"));
 
 	py::class_<IPortfolioManager, PyIPortfolioManager, std::shared_ptr<IPortfolioManager>>(m, "IPortfolioManager")
-		.def(py::init<>());
+		.def(py::init<>())
+		.def("get_portfolio_table", &IPortfolioManager::get_portfolio_table)
+		.def("reset_user_portfolio", &IPortfolioManager::reset_user_portfolio, py::arg("user_id"))
+		.def("add_to_security", &IPortfolioManager::add_to_security, py::arg("user_id"), py::arg("security_id"), py::arg("addition"))
+		.def("add_to_two_securities", &IPortfolioManager::add_to_two_securities, py::arg("user_id"), py::arg("security_1"), py::arg("addition_1"), py::arg("security_2"), py::arg("addition_2"))
+		.def("multiply_and_add_1_to_2", &IPortfolioManager::multiply_and_add_1_to_2, py::arg("user_id"), py::arg("security_1"), py::arg("security_2"), py::arg("multiply"))
+		.def("multiply_and_add_1_to_2_and_set_1", &IPortfolioManager::multiply_and_add_1_to_2_and_set_1,
+			py::arg("user_id"), py::arg("security_1"), py::arg("security_2"), py::arg("multiply"), py::arg("set_value"));
 
 	py::class_<ISimulation, PyISimulation, std::shared_ptr<ISimulation>>(m, "ISimulation")
-		.def(py::init<const std::map<SecurityTicker, std::shared_ptr<ISecurity>>&, float, uint32_t>())
+		.def(py::init<const std::map<SecurityTicker, std::shared_ptr<ISecurity>>&, float, uint32_t>(),
+			py::arg("securities"), py::arg("T"), py::arg("N"))
 		.def("get_all_tickers", &ISimulation::get_all_tickers)
-		.def("get_security_ticker", &ISimulation::get_security_ticker)
-		.def("get_security_id", &ISimulation::get_security_id)
+		.def("get_security_ticker", &ISimulation::get_security_ticker, py::arg("security_id"))
+		.def("get_security_id", &ISimulation::get_security_id, py::arg("security_ticker"))
 		.def("get_user_id_to_username", &ISimulation::get_user_id_to_username)
 		.def("get_securities_count", &ISimulation::get_securities_count)
 		.def("get_dt", &ISimulation::get_dt)
 		.def("get_t", &ISimulation::get_t)
 		.def("get_T", &ISimulation::get_T)
 		.def("get_tick", &ISimulation::get_tick)
-		.def("get_N", &ISimulation::get_N);
+		.def("get_N", &ISimulation::get_N)
+		.def("add_user", &ISimulation::add_user, py::arg("username"))
+		.def("get_user_count", &ISimulation::get_user_count)
+		.def("get_top_bid", &ISimulation::get_top_bid, py::arg("security_id"))
+		.def("get_top_ask", &ISimulation::get_top_ask, py::arg("security_id"))
+		.def("get_bid_count", &ISimulation::get_bid_count, py::arg("security_id"))
+		.def("get_ask_count", &ISimulation::get_ask_count, py::arg("security_id"))
+		.def("get_order_book", &ISimulation::get_order_book, py::arg("security_id"))
+		.def("get_all_open_user_orders", &ISimulation::get_all_open_user_orders, py::arg("user_id"), py::arg("security_id"))
+		.def("get_cumulative_book_depth", &ISimulation::get_cumulative_book_depth, py::arg("security_id"))
+		.def("do_simulation_step", &ISimulation::do_simulation_step)
+		.def("submit_limit_order", &ISimulation::submit_limit_order,
+			py::arg("user_id"), py::arg("security_id"), py::arg("side"), py::arg("price"), py::arg("volume"))
+		.def("submit_cancel_order", &ISimulation::submit_cancel_order,
+			py::arg("user_id"), py::arg("security_id"), py::arg("order_id"))
+		.def("reset_simulation", &ISimulation::reset_simulation);
 
 	py::class_<GenericSimulation, ISimulation, std::shared_ptr<GenericSimulation>>(m, "GenericSimulation")
 		.def(py::init<const std::map<SecurityTicker, std::shared_ptr<ISecurity>>&, float, uint32_t>());

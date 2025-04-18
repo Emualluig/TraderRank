@@ -20,11 +20,23 @@ pybind11_add_module(Server MODULE "Server.cpp")
 
 target_link_libraries(Server PRIVATE pybind11::module)
 target_link_libraries(Server PRIVATE magic_enum::magic_enum)
-target_link_libraries(Server PRIVATE fmt::fmt)
+target_link_libraries(Server PRIVATE fmt::fmt-header-only)
 target_link_libraries(Server PRIVATE nlohmann_json::nlohmann_json)
 
+set(MODULE_OUTPUT_DIR "${CMAKE_SOURCE_DIR}/notebooks/python_modules")
+set(MODULE_FILE "${MODULE_OUTPUT_DIR}/Server.pyd")
+
 add_custom_command(TARGET Server POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${MODULE_OUTPUT_DIR}"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         $<TARGET_FILE:Server>
-        "${CMAKE_SOURCE_DIR}/notebooks/python_modules/Server.pyd"
+        "${MODULE_FILE}"
 )
+
+add_custom_command(TARGET Server POST_BUILD
+    COMMAND python -m pybind11_stubgen Server --output-dir "${MODULE_OUTPUT_DIR}"
+    WORKING_DIRECTORY "${MODULE_OUTPUT_DIR}"
+    COMMENT "Generating .pyi stub file using pybind11-stubgen"
+)
+
+
