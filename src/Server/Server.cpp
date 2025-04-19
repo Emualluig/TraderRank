@@ -27,124 +27,6 @@
 
 namespace py = pybind11;
 
-/*
-namespace DemoSecurities {
-    class Security_CAD : public Server::ISecurity {
-    public:
-        // Inherited via ISecurity
-        bool is_tradeable() override
-        {
-            return false;
-        }
-        void before_step(Simulation& simulation) override {}
-        void after_step(Simulation& simulation) override {}
-        void on_simulation_start(Simulation& simulation) override {}
-        void on_simulation_end(Simulation& simulation) override {}
-        void on_trade_executed(
-            Simulation& simulation,
-            Server::UserID buyer, Server::UserID seller, float price, float quantity
-        ) override {
-        }
-    };
-
-    class Security_BOND : public Server::ISecurity {
-        float rate = 0.05f;
-        float face_value = 100.0f;
-    public:
-        // Inherited via ISecurity
-        bool is_tradeable() override
-        {
-            return true;
-        }
-        void before_step(Simulation& simulation) override {}
-        void after_step(Simulation& simulation) override {
-            // Bonds make interest payment
-            auto dt = simulation.get_dt();
-            auto bond_id = simulation.get_security_id("BOND");
-            auto cad_id = simulation.get_security_id("CAD");
-            auto user_table = simulation.get_user_table();
-            for (UserID index_user = 0; index_user < user_table->get_user_count(); index_user++) {
-                // The bond pays `rate * dt` per step, having more bonds increases nomial amount added to cad
-                user_table->multiply_and_add_1_to_2(
-                    index_user, bond_id, cad_id, rate * face_value * dt
-                );
-            }
-        }
-        void on_simulation_start(Simulation& simulation) override {}
-        void on_simulation_end(Simulation& simulation) override {
-            auto bond_id = simulation.get_security_id("BOND");
-            auto cad_id = simulation.get_security_id("CAD");
-            auto user_table = simulation.get_user_table();
-            for (UserID index_user = 0; index_user < user_table->get_user_count(); index_user++) {
-                // Reduce the amount of bond to 0, and realize it as CAD (each bond is worth 100).
-                user_table->multiply_and_add_1_to_2_and_set_1(
-                    index_user, bond_id, cad_id, face_value, 0.0f
-                );
-            }
-        }
-        void on_trade_executed(
-            Simulation& simulation,
-            Server::UserID buyer, Server::UserID seller, float price, float quantity
-        ) override {
-            auto bond_id = simulation.get_security_id("BOND");
-            auto cad_id = simulation.get_security_id("CAD");
-            auto user_table = simulation.get_user_table();
-            // The bond buyer gets the bond, but losses money
-            user_table->add_to_two_securities(buyer, bond_id, quantity, cad_id, -price * quantity);
-            // The bond seller losses the bond, but gets money
-            user_table->add_to_two_securities(seller, bond_id, -quantity, cad_id, price * quantity);
-        }
-    };
-
-    class Security_STOCK : public Server::ISecurity {
-        // Inherited via ISecurity
-        bool is_tradeable() override
-        {
-            return true;
-        }
-        void before_step(Simulation& simulation) override {}
-        void after_step(Simulation& simulation) override {}
-        void on_simulation_start(Simulation& simulation) override {}
-        void on_simulation_end(Simulation& simulation) override {
-            // At the end convert to CAD at midpoint price, or `100.0f`
-            auto stock_id = simulation.get_security_id("STOCK");
-            auto cad_id = simulation.get_security_id("CAD");
-
-
-            auto& order_book = simulation.get_order_book(stock_id);
-            auto close_bid_price = 100.0f;
-            auto close_ask_price = 100.0f;
-            if (order_book.bid_size() > 0) {
-                close_bid_price = order_book.top_bid().price;
-            }
-            if (order_book.ask_size() > 0) {
-                close_ask_price = order_book.top_ask().price;
-            }
-
-            auto user_table = simulation.get_user_table();
-            for (UserID index_user = 0; index_user < user_table->get_user_count(); index_user++) {
-                user_table->multiply_and_add_1_to_2_and_set_1(
-                    index_user, stock_id, cad_id, (close_bid_price + close_ask_price) / 2.0f, 0.0f
-                );
-            }
-        }
-        void on_trade_executed(
-            Simulation& simulation,
-            Server::UserID buyer, Server::UserID seller, float price, float quantity
-        ) override {
-            auto stock_id = simulation.get_security_id("STOCK");
-            auto cad_id = simulation.get_security_id("CAD");
-            auto user_table = simulation.get_user_table();
-            // The buyer gets the stock, but losses money
-            user_table->add_to_two_securities(buyer, stock_id, quantity, cad_id, -price * quantity);
-            // The seller losses the stock, but gets money
-            user_table->add_to_two_securities(seller, stock_id, -quantity, cad_id, price * quantity);
-        }
-    };
-};
-*/
-
-
 struct IDNotFoundError : std::out_of_range {
 	using std::out_of_range::out_of_range;
 };
@@ -413,6 +295,7 @@ public:
 	// User management
 	virtual UserID add_user(const Username& username) = 0; // May throw
 	virtual uint32_t get_user_count() const noexcept = 0;
+	virtual std::vector<float> get_user_portfolio(UserID user_id) const = 0; // May throw
 
 	// Simulation order book information
 	virtual const LimitOrder& get_top_bid(SecurityID security_id) const = 0; // May throw
@@ -428,10 +311,28 @@ public:
 	virtual OrderID submit_limit_order(UserID user_id, SecurityID security_id, OrderSide side, float price, float volume) = 0; // May throw
 	virtual void submit_cancel_order(UserID user_id, SecurityID security_id, OrderID order_id) = 0; // May throw
 	virtual void reset_simulation() = 0;
+	// TODO: can I do something better than this?
+	virtual OrderID direct_insert_limit_order(UserID user_id, SecurityID security_id, OrderSide side, float price, float volume) = 0;
+
+	// TODO:
+	// public:
+	// virtual uint32_t get_bid_count(SecurityID security_id) const = 0;
+	// virtual uint32_t get_ask_count(SecurityID security_id) const = 0;
+	// virtual OrderID submit_market_order(UserID user_id, SecurityID security_id, OrderSide side, float volume) = 0;
+	// virtual std::optional<const LimitOrder&> try_get_top_bid(SecurityID security_id) const = 0;
+	// virtual std::optional<const LimitOrder&> try_get_top_ask(SecurityID security_id) const = 0;
+	// replace `get_N` with `get_max_tick()`?
+	// protected:
+	// virtual bool does_user_id_exist() const noexcept = 0;
+	// virtual bool does_security_id_exist() const noexcept = 0;
+
 };
 
 class IPortfolioManager {
 public:
+	virtual ~IPortfolioManager() = default;
+
+	virtual uint32_t get_user_count() const noexcept = 0;
 	virtual std::vector<std::vector<float>> get_portfolio_table() const noexcept = 0;
 	virtual void reset_user_portfolio(UserID user_id) = 0;
 	virtual float add_to_security(UserID user_id, SecurityID security_1, float addition_1) = 0; // May throw
@@ -442,6 +343,8 @@ public:
 
 class ISecurity {
 public:
+	virtual ~ISecurity() = default;
+
 	virtual bool is_tradeable() = 0;
 	virtual void before_step(ISimulation& simulation, std::shared_ptr<IPortfolioManager> portfolio) = 0;
 	virtual void after_step(ISimulation& simulation, std::shared_ptr<IPortfolioManager> portfolio) = 0;
@@ -469,7 +372,7 @@ public:
 		return columns;
 	}
 
-	const uint32_t get_user_count() const noexcept {
+	uint32_t get_user_count() const noexcept override {
 		return user_count;
 	}
 
@@ -647,6 +550,12 @@ public:
 	uint32_t get_user_count() const noexcept override {
 		return user_portfolio_manager->get_user_count();
 	};
+	std::vector<float> get_user_portfolio(UserID user_id) const override {
+		if (user_id >= get_user_count()) {
+			throw IDNotFoundError(fmt::format("The user_id: `{}` doesn't exist.", user_id));
+		}
+		return user_portfolio_manager->get_portfolio_table()[user_id];
+	}
 
 	// Simulation order book information
 	const LimitOrder& get_top_bid(SecurityID security_id) const override {
@@ -886,6 +795,9 @@ public:
 		if (user_id >= get_user_count()) {
 			throw IDNotFoundError(fmt::format("The user_id: `{}` doesn't exist.", user_id));
 		}
+		if (security_id >= get_securities_count()) {
+			throw IDNotFoundError(fmt::format("The security_id: `{}` doesn't exist.", security_id));
+		}
 		auto order_queue_lock = std::unique_lock(order_queue_mutex);
 		submitted_orders.at(security_id).push_back(CancelOrder{ .user_id = user_id, .order_id = order_id });
 	};
@@ -898,6 +810,140 @@ public:
 			user_portfolio_manager->reset_user_portfolio(user_id);
 		}
 		reset_tick_to_zero();
+	};
+	OrderID direct_insert_limit_order(UserID user_id, SecurityID security_id, OrderSide side, float price, float volume) override {
+		if (user_id >= get_user_count()) {
+			throw IDNotFoundError(fmt::format("The user_id: `{}` doesn't exist.", user_id));
+		}
+		if (security_id >= get_securities_count()) {
+			throw IDNotFoundError(fmt::format("The security_id: `{}` doesn't exist.", security_id));
+		}
+		auto order_queue_lock = std::unique_lock(order_queue_mutex);
+		auto& order_book = order_books.at(security_id);
+		auto order_id = order_id_counter++;
+		order_book.insert_order(LimitOrder{ .user_id = user_id, .order_id = order_id, .side = side, .price = price, .volume = volume });
+		return order_id;
+	}
+};
+
+namespace GenericSecurities {
+	class GenericCurrency : public ISecurity {
+		SecurityTicker ticker;
+	public:
+		explicit GenericCurrency(const SecurityTicker& ticker) : ticker{ ticker } {}
+
+		// Inherited via ISecurity
+		bool is_tradeable() override
+		{
+			return false;
+		}
+		void before_step(ISimulation& simulation, std::shared_ptr<IPortfolioManager> portfolio) override {}
+		void after_step(ISimulation& simulation, std::shared_ptr<IPortfolioManager> portfolio) override {}
+		void on_simulation_start(ISimulation& simulation, std::shared_ptr<IPortfolioManager> portfolio) override {}
+		void on_simulation_end(ISimulation& simulation, std::shared_ptr<IPortfolioManager> portfolio) override {}
+		void on_trade_executed(
+			ISimulation& simulation, std::shared_ptr<IPortfolioManager> portfolio,
+			UserID buyer, UserID seller, float price, float quantity
+		) override {
+		}
+	};
+
+	class GenericBond : public ISecurity {
+		SecurityTicker ticker;
+		SecurityTicker currency;
+		float rate;
+		float face_value;
+	public:
+		explicit GenericBond(const SecurityTicker& ticker, const SecurityTicker& currency, float rate, float face_value) : ticker{ ticker }, currency{ currency }, rate{ rate }, face_value { face_value } {}
+
+		// Inherited via ISecurity
+		bool is_tradeable() override
+		{
+			return true;
+		}
+		void before_step(ISimulation& simulation, std::shared_ptr<IPortfolioManager> portfolio) override {}
+		void after_step(ISimulation& simulation, std::shared_ptr<IPortfolioManager> portfolio) override {
+			// Bonds make interest payment
+			auto dt = simulation.get_dt();
+			auto bond_id = simulation.get_security_id(ticker);
+			auto cad_id = simulation.get_security_id(currency);
+			for (UserID index_user = 0; index_user < portfolio->get_user_count(); index_user++) {
+				// The bond pays `rate * dt` per step, having more bonds increases nomial amount added to cad
+				portfolio->multiply_and_add_1_to_2(
+					index_user, bond_id, cad_id, rate * face_value * dt
+				);
+			}
+		}
+		void on_simulation_start(ISimulation& simulation, std::shared_ptr<IPortfolioManager> portfolio) override {}
+		void on_simulation_end(ISimulation& simulation, std::shared_ptr<IPortfolioManager> portfolio) override {
+			auto bond_id = simulation.get_security_id(ticker);
+			auto cad_id = simulation.get_security_id(currency);
+			for (UserID index_user = 0; index_user < portfolio->get_user_count(); index_user++) {
+				// Reduce the amount of bond to 0, and realize it as CAD (each bond is worth 100).
+				portfolio->multiply_and_add_1_to_2_and_set_1(
+					index_user, bond_id, cad_id, face_value, 0.0f
+				);
+			}
+		}
+		void on_trade_executed(
+			ISimulation& simulation, std::shared_ptr<IPortfolioManager> portfolio,
+			UserID buyer, UserID seller, float price, float quantity
+		) override {
+			auto bond_id = simulation.get_security_id(ticker);
+			auto cad_id = simulation.get_security_id(currency);
+			// The bond buyer gets the bond, but losses money
+			portfolio->add_to_two_securities(buyer, bond_id, quantity, cad_id, -price * quantity);
+			// The bond seller losses the bond, but gets money
+			portfolio->add_to_two_securities(seller, bond_id, -quantity, cad_id, price * quantity);
+		}
+	};
+
+	class GenericStock : public ISecurity {
+		SecurityTicker ticker;
+		SecurityTicker currency;
+	public:
+		explicit GenericStock(const SecurityTicker& ticker, const SecurityTicker& currency) : ticker{ ticker }, currency{ currency } {}
+
+		// Inherited via ISecurity
+		bool is_tradeable() override
+		{
+			return true;
+		}
+		void before_step(ISimulation& simulation, std::shared_ptr<IPortfolioManager> portfolio) override {}
+		void after_step(ISimulation& simulation, std::shared_ptr<IPortfolioManager> portfolio) override {}
+		void on_simulation_start(ISimulation& simulation, std::shared_ptr<IPortfolioManager> portfolio) override {}
+		void on_simulation_end(ISimulation& simulation, std::shared_ptr<IPortfolioManager> portfolio) override {
+			// At the end convert to CAD at midpoint price, or `100.0f`
+			auto stock_id = simulation.get_security_id(ticker);
+			auto cad_id = simulation.get_security_id(currency);
+
+
+			auto close_bid_price = 100.0f;
+			auto close_ask_price = 100.0f;
+			if (simulation.get_bid_count(stock_id) > 0) {
+				close_bid_price = simulation.get_top_bid(stock_id).price;
+			}
+			if (simulation.get_ask_count(stock_id) > 0) {
+				close_ask_price = simulation.get_top_ask(stock_id).price;
+			}
+
+			for (UserID index_user = 0; index_user < portfolio->get_user_count(); index_user++) {
+				portfolio->multiply_and_add_1_to_2_and_set_1(
+					index_user, stock_id, cad_id, (close_bid_price + close_ask_price) / 2.0f, 0.0f
+				);
+			}
+		}
+		void on_trade_executed(
+			ISimulation& simulation, std::shared_ptr<IPortfolioManager> portfolio,
+			UserID buyer, UserID seller, float price, float quantity
+		) override {
+			auto stock_id = simulation.get_security_id(ticker);
+			auto cad_id = simulation.get_security_id(currency);
+			// The buyer gets the stock, but losses money
+			portfolio->add_to_two_securities(buyer, stock_id, quantity, cad_id, -price * quantity);
+			// The seller losses the stock, but gets money
+			portfolio->add_to_two_securities(seller, stock_id, -quantity, cad_id, price * quantity);
+		}
 	};
 };
 
@@ -929,6 +975,10 @@ class PyIPortfolioManager : public IPortfolioManager {
 public:
 	using IPortfolioManager::IPortfolioManager;
 
+	// Inherited via IPortfolioManager
+	uint32_t get_user_count() const noexcept override {
+		PYBIND11_OVERRIDE_PURE(uint32_t, IPortfolioManager, get_user_count);
+	}
 	std::vector<std::vector<float>> get_portfolio_table() const noexcept override {
 		PYBIND11_OVERRIDE_PURE(std::vector<std::vector<float>>, IPortfolioManager, get_portfolio_table);
 	}
@@ -958,6 +1008,9 @@ public:
 	}
 	uint32_t get_user_count() const noexcept override {
 		PYBIND11_OVERRIDE_PURE(uint32_t, ISimulation, get_user_count);
+	}
+	std::vector<float> get_user_portfolio(UserID user_id) const override {
+		PYBIND11_OVERRIDE_PURE(std::vector<float>, ISimulation, get_user_portfolio, user_id);
 	}
 	const LimitOrder& get_top_bid(SecurityID sid) const override {
 		PYBIND11_OVERRIDE_PURE(const LimitOrder&, ISimulation, get_top_bid, sid);
@@ -991,6 +1044,9 @@ public:
 	}
 	void reset_simulation() override {
 		PYBIND11_OVERRIDE_PURE(void, ISimulation, reset_simulation);
+	}
+	OrderID direct_insert_limit_order(UserID uid, SecurityID sid, OrderSide s, float p, float v) override {
+		PYBIND11_OVERRIDE_PURE(OrderID, ISimulation, direct_insert_limit_order, uid, sid, s, p, v);
 	}
 };
 
@@ -1070,6 +1126,7 @@ PYBIND11_MODULE(Server, m) {
 		.def("get_N", &ISimulation::get_N)
 		.def("add_user", &ISimulation::add_user, py::arg("username"))
 		.def("get_user_count", &ISimulation::get_user_count)
+		.def("get_user_portfolio", &ISimulation::get_user_portfolio)
 		.def("get_top_bid", &ISimulation::get_top_bid, py::arg("security_id"))
 		.def("get_top_ask", &ISimulation::get_top_ask, py::arg("security_id"))
 		.def("get_bid_count", &ISimulation::get_bid_count, py::arg("security_id"))
@@ -1082,8 +1139,27 @@ PYBIND11_MODULE(Server, m) {
 			py::arg("user_id"), py::arg("security_id"), py::arg("side"), py::arg("price"), py::arg("volume"))
 		.def("submit_cancel_order", &ISimulation::submit_cancel_order,
 			py::arg("user_id"), py::arg("security_id"), py::arg("order_id"))
-		.def("reset_simulation", &ISimulation::reset_simulation);
+		.def("reset_simulation", &ISimulation::reset_simulation)
+		.def("direct_insert_limit_order", &ISimulation::direct_insert_limit_order, py::arg("user_id"), py::arg("security_id"), py::arg("side"), py::arg("price"), py::arg("volume"));
 
 	py::class_<GenericSimulation, ISimulation, std::shared_ptr<GenericSimulation>>(m, "GenericSimulation")
 		.def(py::init<const std::map<SecurityTicker, std::shared_ptr<ISecurity>>&, float, uint32_t>());
+
+	py::module_ generic = m.def_submodule("GenericSecurities", "Generic security types");
+
+	py::class_<GenericSecurities::GenericCurrency, ISecurity, std::shared_ptr<GenericSecurities::GenericCurrency>>(generic, "GenericCurrency")
+		.def(py::init<const SecurityTicker&>(),
+			py::arg("ticker"));
+
+	py::class_<GenericSecurities::GenericBond, ISecurity, std::shared_ptr<GenericSecurities::GenericBond>>(generic, "GenericBond")
+		.def(py::init<const SecurityTicker&, const SecurityTicker&, float, float>(),
+			py::arg("ticker"),
+			py::arg("currency"),
+			py::arg("rate"),
+			py::arg("face_value"));
+
+	py::class_<GenericSecurities::GenericStock, ISecurity, std::shared_ptr<GenericSecurities::GenericStock>>(generic, "GenericStock")
+		.def(py::init<const SecurityTicker&, const SecurityTicker&>(),
+			py::arg("ticker"),
+			py::arg("currency"));
 }

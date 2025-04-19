@@ -9,6 +9,9 @@ if (POLICY CMP0141)
   set(CMAKE_MSVC_DEBUG_INFORMATION_FORMAT "$<IF:$<AND:$<C_COMPILER_ID:MSVC>,$<CXX_COMPILER_ID:MSVC>>,$<$<CONFIG:Debug,RelWithDebInfo>:EditAndContinue>,$<$<CONFIG:Debug,RelWithDebInfo>:ProgramDatabase>>")
 endif()
 
+# TODO: determine if we keep this:
+cmake_policy(SET CMP0069 NEW)
+
 project ("src")
 
 # Add pybind11 as subdirectory before any dependent target
