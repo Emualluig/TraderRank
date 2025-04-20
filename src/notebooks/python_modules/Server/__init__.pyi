@@ -1,7 +1,7 @@
 from __future__ import annotations
 import typing
 from . import GenericSecurities
-__all__ = ['ASK', 'BID', 'CancelOrder', 'GenericSecurities', 'GenericSimulation', 'IPortfolioManager', 'ISecurity', 'ISimulation', 'LimitOrder', 'LimitOrderList', 'OrderSide', 'PriceDepthMap', 'SimulationStepResult', 'Transaction']
+__all__ = ['ASK', 'BID', 'BUY', 'CancelOrder', 'GenericSecurities', 'GenericSimulation', 'IPortfolioManager', 'ISecurity', 'ISimulation', 'LimitOrder', 'LimitOrderList', 'OrderAction', 'OrderSide', 'PriceDepthMap', 'SELL', 'SimulationStepResult', 'Transaction']
 class CancelOrder:
     def __init__(self) -> None:
         ...
@@ -102,6 +102,8 @@ class ISimulation:
     def submit_cancel_order(self, user_id: typing.SupportsInt, security_id: typing.SupportsInt, order_id: typing.SupportsInt) -> None:
         ...
     def submit_limit_order(self, user_id: typing.SupportsInt, security_id: typing.SupportsInt, side: OrderSide, price: typing.SupportsFloat, volume: typing.SupportsFloat) -> int:
+        ...
+    def submit_market_order(self, user_id: typing.SupportsInt, security_id: typing.SupportsInt, action: OrderAction, volume: typing.SupportsFloat) -> int:
         ...
 class LimitOrder:
     side: OrderSide
@@ -209,6 +211,43 @@ class LimitOrderList:
         """
         Remove and return the item at index ``i``
         """
+class OrderAction:
+    """
+    Members:
+    
+      BUY
+    
+      SELL
+    """
+    BUY: typing.ClassVar[OrderAction]  # value = <OrderAction.BUY: 0>
+    SELL: typing.ClassVar[OrderAction]  # value = <OrderAction.SELL: 1>
+    __members__: typing.ClassVar[dict[str, OrderAction]]  # value = {'BUY': <OrderAction.BUY: 0>, 'SELL': <OrderAction.SELL: 1>}
+    def __eq__(self, other: typing.Any) -> bool:
+        ...
+    def __getstate__(self) -> int:
+        ...
+    def __hash__(self) -> int:
+        ...
+    def __index__(self) -> int:
+        ...
+    def __init__(self, value: typing.SupportsInt) -> None:
+        ...
+    def __int__(self) -> int:
+        ...
+    def __ne__(self, other: typing.Any) -> bool:
+        ...
+    def __repr__(self) -> str:
+        ...
+    def __setstate__(self, state: typing.SupportsInt) -> None:
+        ...
+    def __str__(self) -> str:
+        ...
+    @property
+    def name(self) -> str:
+        ...
+    @property
+    def value(self) -> int:
+        ...
 class OrderSide:
     """
     Members:
@@ -352,3 +391,5 @@ class Transaction:
         ...
 ASK: OrderSide  # value = <OrderSide.ASK: 1>
 BID: OrderSide  # value = <OrderSide.BID: 0>
+BUY: OrderAction  # value = <OrderAction.BUY: 0>
+SELL: OrderAction  # value = <OrderAction.SELL: 1>

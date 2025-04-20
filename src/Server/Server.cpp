@@ -16,9 +16,11 @@
 #include <unordered_set>
 #include <exception>
 #include <stdexcept>
+#include <source_location>
 #include <fmt/color.h>
 #include <magic_enum/magic_enum.hpp>
 #include <nlohmann/json.hpp>
+#include <strong_type/strong_type.hpp>
 // TODO: investigate if we should use https://github.com/johnmcfarlane/cnl instead of float/double
 
 #include <pybind11/pybind11.h>
@@ -28,7 +30,8 @@
 namespace py = pybind11;
 
 struct IDNotFoundError : std::out_of_range {
-	using std::out_of_range::out_of_range;
+	explicit IDNotFoundError(std::string&& message, const std::source_location& loc = std::source_location::current()) : 
+		std::out_of_range(fmt::format("[{0} {1}:{2}] Exception in: {3}, problem: {4}", loc.file_name(), loc.line(), loc.column(), loc.function_name(), message)) {}
 };
 
 using UserID = uint32_t;
@@ -38,7 +41,7 @@ using OrderID = uint32_t;
 using Username = std::string;
 using FloatPair = std::pair<float, float>;
 
-enum OrderSide : uint8_t {
+enum class OrderSide : uint8_t {
 	BID,
 	ASK
 };
@@ -64,7 +67,17 @@ struct CancelOrder {
 	UserID user_id;
 	OrderID order_id;
 };
-using OrderVariant = std::variant<LimitOrder, CancelOrder>;
+enum class OrderAction : uint8_t {
+	BUY,
+	SELL
+};
+struct MarketOrder {
+	UserID user_id;
+	OrderID order_id;
+	OrderAction action;
+	float volume;
+};
+using OrderVariant = std::variant<LimitOrder, CancelOrder, MarketOrder>;
 
 // (bid, ask) pair of depths
 using BookDepth = std::pair<std::map<float, float>, std::map<float, float>>;
@@ -91,7 +104,7 @@ public:
 	}
 
 	bool insert_order(const LimitOrder& order) {
-		if (order.side == BID) {
+		if (order.side == OrderSide::BID) {
 			auto [it, inserted] = bid_orders.insert(order);
 			if (!inserted) return false;
 			bid_map[order.order_id] = it;
@@ -313,12 +326,12 @@ public:
 	virtual void reset_simulation() = 0;
 	// TODO: can I do something better than this?
 	virtual OrderID direct_insert_limit_order(UserID user_id, SecurityID security_id, OrderSide side, float price, float volume) = 0;
+	virtual OrderID submit_market_order(UserID user_id, SecurityID security_id, OrderAction action, float volume) = 0; // May throw
 
 	// TODO:
 	// public:
 	// virtual uint32_t get_bid_count(SecurityID security_id) const = 0;
 	// virtual uint32_t get_ask_count(SecurityID security_id) const = 0;
-	// virtual OrderID submit_market_order(UserID user_id, SecurityID security_id, OrderSide side, float volume) = 0;
 	// virtual std::optional<const LimitOrder&> try_get_top_bid(SecurityID security_id) const = 0;
 	// virtual std::optional<const LimitOrder&> try_get_top_ask(SecurityID security_id) const = 0;
 	// replace `get_N` with `get_max_tick()`?
@@ -603,9 +616,10 @@ public:
 		}
 		return order_books.at(security_id).get_book_depth();
 	};
-		
+	
+protected:
 	// Simulation actions
-	SimulationStepResult do_simulation_step() override {
+	SimulationStepResult do_simulation_step_inner() {
 		auto submitted_orders_lock = std::unique_lock(order_queue_mutex);
 		// Perform a simulaiton step
 		auto step = get_tick(); // step ∈ [0, ..., N] inclusive
@@ -662,55 +676,50 @@ public:
 
 					// The order book is now potentially crossed, we must resolve it
 					// additionally, if it was crossed, it is due to the added order, by our invariants
-					while (true) {
-						if (order_book.bid_size() > 0 && order_book.ask_size() > 0) {
-							auto& top_bid = order_book.top_bid();
-							auto& top_ask = order_book.top_ask();
-							if (top_bid.price >= top_ask.price) {
-								// The trades will execute on the submitted order's opposite side.
-								// If the submitted order is a bid, the market is crossed because of it, 
-								// the execution price will be of the ask. And vice-versa if the crossing is ask.
-								auto transacted_price = order.side == OrderSide::BID ? top_ask.price : top_bid.price;
-								auto transacted_volume = std::min(top_bid.volume, top_ask.volume);
+					while (order_book.bid_size() > 0 && order_book.ask_size() > 0) {
+						auto& top_bid = order_book.top_bid();
+						auto& top_ask = order_book.top_ask();
+						if (top_bid.price >= top_ask.price) {
+							// The trades will execute on the submitted order's opposite side.
+							// If the submitted order is a bid, the market is crossed because of it, 
+							// the execution price will be of the ask. And vice-versa if the crossing is ask.
+							auto transacted_price = order.side == OrderSide::BID ? top_ask.price : top_bid.price;
+							auto transacted_volume = std::min(top_bid.volume, top_ask.volume);
 
-								auto buyer_id = top_bid.user_id;
-								auto seller_id = top_ask.user_id;
+							auto buyer_id = top_bid.user_id;
+							auto seller_id = top_ask.user_id;
 
-								auto top_bid_id = top_bid.order_id;
-								auto top_ask_id = top_ask.order_id;
+							auto top_bid_id = top_bid.order_id;
+							auto top_ask_id = top_ask.order_id;
 
-								// After this `top_bid` may be invalidated
-								auto remaining_bid_volume = top_bid.volume - transacted_volume;
-								if (remaining_bid_volume == 0) {
-									local_partially_transacted_orders.erase(top_bid_id);
-									local_fully_transacted_orders.emplace(top_bid_id);
-									order_book.pop_top_bid();
-								}
-								else {
-									top_bid.volume = remaining_bid_volume;
-									local_partially_transacted_orders[top_bid_id] = remaining_bid_volume;
-								}
-
-								// After this `top_ask` may be invalidated
-								auto remaining_ask_volume = top_ask.volume - transacted_volume;
-								if (remaining_ask_volume == 0) {
-									local_partially_transacted_orders.erase(top_ask_id);
-									local_fully_transacted_orders.emplace(top_ask_id);
-									order_book.pop_top_ask();
-								}
-								else {
-									top_ask.volume = remaining_ask_volume;
-									local_partially_transacted_orders[top_ask_id] = remaining_ask_volume;
-								}
-
-								// Perform custom security trade resolution
-								// Must often this is used to simply modify security and cash accounts
-								security_class->on_trade_executed(*this, user_portfolio_manager, buyer_id, seller_id, transacted_price, transacted_volume);
-								local_transactions.push_back(Transaction{ .price = transacted_price, .volume = transacted_volume, .buyer_id = buyer_id, .seller_id = seller_id });
+							// After this `top_bid` may be invalidated
+							auto remaining_bid_volume = top_bid.volume - transacted_volume;
+							if (remaining_bid_volume == 0.0f) {
+								local_partially_transacted_orders.erase(top_bid_id);
+								local_fully_transacted_orders.emplace(top_bid_id);
+								order_book.pop_top_bid();
 							}
 							else {
-								break;
+								top_bid.volume = remaining_bid_volume;
+								local_partially_transacted_orders[top_bid_id] = remaining_bid_volume;
 							}
+
+							// After this `top_ask` may be invalidated
+							auto remaining_ask_volume = top_ask.volume - transacted_volume;
+							if (remaining_ask_volume == 0.0f) {
+								local_partially_transacted_orders.erase(top_ask_id);
+								local_fully_transacted_orders.emplace(top_ask_id);
+								order_book.pop_top_ask();
+							}
+							else {
+								top_ask.volume = remaining_ask_volume;
+								local_partially_transacted_orders[top_ask_id] = remaining_ask_volume;
+							}
+
+							// Perform custom security trade resolution
+							// Must often this is used to simply modify security and cash accounts
+							security_class->on_trade_executed(*this, user_portfolio_manager, buyer_id, seller_id, transacted_price, transacted_volume);
+							local_transactions.push_back(Transaction{ .price = transacted_price, .volume = transacted_volume, .buyer_id = buyer_id, .seller_id = seller_id });
 						}
 						else {
 							break;
@@ -729,6 +738,69 @@ public:
 					auto was_cancelled = order_book.cancel_order(order);
 					if (was_cancelled) {
 						local_cancelled_orders.insert(order.order_id);
+					}
+				}
+				else if (index == 2) {
+					MarketOrder& order = std::get<2>(variant_command);
+					auto action = order.action;
+					auto order_user_id = order.user_id;
+					assert(action == OrderAction::BUY || action == OrderAction::SELL);
+					while (order.volume > 0) {
+						if (action == OrderAction::BUY && order_book.ask_size() > 0) {
+							// The market order is buying, so we must go to the ask side
+							auto& top_ask = order_book.top_ask();
+							auto top_ask_order_id = top_ask.order_id;
+							auto top_ask_user_id = top_ask.user_id;
+							auto transacted_volume = std::min(order.volume, top_ask.volume);
+							auto transacted_price = top_ask.price;
+
+							auto remaining_order_volume = order.volume - transacted_volume;
+							auto remaining_ask_volume = top_ask.volume - transacted_volume;
+							assert(remaining_order_volume == 0 || remaining_ask_volume == 0);
+							
+							order.volume = remaining_order_volume;
+							if (remaining_ask_volume == 0.0f) {
+								local_partially_transacted_orders.erase(top_ask_order_id);
+								local_fully_transacted_orders.emplace(top_ask_order_id);
+								order_book.pop_top_ask();
+							}
+							else {
+								top_ask.volume = remaining_ask_volume;
+								local_partially_transacted_orders[top_ask_order_id] = remaining_ask_volume;
+							}
+
+							security_class->on_trade_executed(*this, user_portfolio_manager, order_user_id, top_ask_user_id, transacted_price, transacted_volume);
+							local_transactions.push_back(Transaction{ .price = transacted_price, .volume = transacted_volume, .buyer_id = order_user_id, .seller_id = top_ask_user_id });
+						}
+						else if (action == OrderAction::SELL && order_book.bid_size() > 0) {
+							// The market order is selling, so we must go to the bid side
+							auto& top_bid = order_book.top_bid();
+							auto top_bid_order_id = top_bid.order_id;
+							auto top_bid_user_id = top_bid.user_id;
+							auto transacted_volume = std::min(order.volume, top_bid.volume);
+							auto transacted_price = top_bid.price;
+
+							auto remaining_order_volume = order.volume - transacted_volume;
+							auto remaining_bid_volume = top_bid.volume - transacted_volume;
+							assert(remaining_order_volume == 0 || remaining_bid_volume == 0);
+
+							order.volume = remaining_order_volume;
+							if (remaining_bid_volume == 0.0f) {
+								local_partially_transacted_orders.erase(top_bid_order_id);
+								local_fully_transacted_orders.emplace(top_bid_order_id);
+								order_book.pop_top_bid();
+							}
+							else {
+								top_bid.volume = remaining_bid_volume;
+								local_partially_transacted_orders[top_bid_order_id] = remaining_bid_volume;
+							}
+
+							security_class->on_trade_executed(*this, user_portfolio_manager, top_bid_user_id, order_user_id, transacted_price, transacted_volume);
+							local_transactions.push_back(Transaction{ .price = transacted_price, .volume = transacted_volume, .buyer_id = top_bid_user_id, .seller_id = order_user_id });
+						}
+						else {
+							break;
+						}
 					}
 				}
 				else {
@@ -779,12 +851,23 @@ public:
 			.has_next_step = get_tick() <= get_N()
 		};
 	};
+public:
+	SimulationStepResult do_simulation_step() override {
+		return do_simulation_step_inner();
+	}
+
 	OrderID submit_limit_order(UserID user_id, SecurityID security_id, OrderSide side, float price, float volume) override {
 		if (user_id >= get_user_count()) {
 			throw IDNotFoundError(fmt::format("The user_id: `{}` doesn't exist.", user_id));
 		}
 		if (security_id >= get_securities_count()) {
 			throw IDNotFoundError(fmt::format("The security_id: `{}` doesn't exist.", security_id));
+		}
+		if (volume <= 0) {
+			throw std::runtime_error(fmt::format("Cannot submit a limit order with non-positive volume, received: `{}`.", volume));
+		}
+		if (price <= 0) {
+			throw std::runtime_error(fmt::format("Cannot submit a limit order with non-positive price, received: `{}`.", price));
 		}
 		auto order_queue_lock = std::unique_lock(order_queue_mutex);
 		auto order_id = order_id_counter++;
@@ -818,10 +901,32 @@ public:
 		if (security_id >= get_securities_count()) {
 			throw IDNotFoundError(fmt::format("The security_id: `{}` doesn't exist.", security_id));
 		}
+		if (volume <= 0) {
+			throw std::runtime_error(fmt::format("Cannot submit a limit order with non-positive volume, received: `{}`.", volume));
+		}
+		if (price <= 0) {
+			throw std::runtime_error(fmt::format("Cannot submit a limit order with non-positive price, received: `{}`.", price));
+		}
 		auto order_queue_lock = std::unique_lock(order_queue_mutex);
 		auto& order_book = order_books.at(security_id);
 		auto order_id = order_id_counter++;
 		order_book.insert_order(LimitOrder{ .user_id = user_id, .order_id = order_id, .side = side, .price = price, .volume = volume });
+		return order_id;
+	}
+	OrderID submit_market_order(UserID user_id, SecurityID security_id, OrderAction action, float volume) override
+	{
+		if (user_id >= get_user_count()) {
+			throw IDNotFoundError(fmt::format("The user_id: `{}` doesn't exist.", user_id));
+		}
+		if (security_id >= get_securities_count()) {
+			throw IDNotFoundError(fmt::format("The security_id: `{}` doesn't exist.", security_id));
+		}
+		if (volume <= 0) {
+			throw std::runtime_error(fmt::format("Cannot submit a limit order with non-positive volume, received: `{}`.", volume));
+		}
+		auto order_queue_lock = std::unique_lock(order_queue_mutex);
+		auto order_id = order_id_counter++;
+		submitted_orders.at(security_id).push_back(MarketOrder{ .user_id = user_id, .order_id = order_id_counter, .action = action, .volume = volume });
 		return order_id;
 	}
 };
@@ -1048,12 +1153,21 @@ public:
 	OrderID direct_insert_limit_order(UserID uid, SecurityID sid, OrderSide s, float p, float v) override {
 		PYBIND11_OVERRIDE_PURE(OrderID, ISimulation, direct_insert_limit_order, uid, sid, s, p, v);
 	}
+	OrderID submit_market_order(UserID uid, SecurityID sid, OrderAction a, float v) override {
+		PYBIND11_OVERRIDE_PURE(OrderID, ISimulation, submit_market_order, uid, sid, a, v);
+	}
+
 };
 
 PYBIND11_MODULE(Server, m) {
 	py::enum_<OrderSide>(m, "OrderSide")
 		.value("BID", OrderSide::BID)
 		.value("ASK", OrderSide::ASK)
+		.export_values();
+
+	py::enum_<OrderAction>(m, "OrderAction")
+		.value("BUY", OrderAction::BUY)
+		.value("SELL", OrderAction::SELL)
 		.export_values();
 
 	py::class_<LimitOrder>(m, "LimitOrder")
@@ -1140,7 +1254,8 @@ PYBIND11_MODULE(Server, m) {
 		.def("submit_cancel_order", &ISimulation::submit_cancel_order,
 			py::arg("user_id"), py::arg("security_id"), py::arg("order_id"))
 		.def("reset_simulation", &ISimulation::reset_simulation)
-		.def("direct_insert_limit_order", &ISimulation::direct_insert_limit_order, py::arg("user_id"), py::arg("security_id"), py::arg("side"), py::arg("price"), py::arg("volume"));
+		.def("direct_insert_limit_order", &ISimulation::direct_insert_limit_order, py::arg("user_id"), py::arg("security_id"), py::arg("side"), py::arg("price"), py::arg("volume"))
+		.def("submit_market_order", &ISimulation::submit_market_order, py::arg("user_id"), py::arg("security_id"), py::arg("action"), py::arg("volume"));
 
 	py::class_<GenericSimulation, ISimulation, std::shared_ptr<GenericSimulation>>(m, "GenericSimulation")
 		.def(py::init<const std::map<SecurityTicker, std::shared_ptr<ISecurity>>&, float, uint32_t>());
