@@ -20,7 +20,6 @@
 #include <fmt/color.h>
 #include <magic_enum/magic_enum.hpp>
 #include <nlohmann/json.hpp>
-#include <strong_type/strong_type.hpp>
 // TODO: investigate if we should use https://github.com/johnmcfarlane/cnl instead of float/double
 
 #include <pybind11/pybind11.h>

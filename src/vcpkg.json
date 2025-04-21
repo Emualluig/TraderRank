@@ -2,7 +2,6 @@
   "dependencies": [
     "magic-enum",
     "fmt",
-    "nlohmann-json",
-    "strong-type"
+    "nlohmann-json"
   ]
 }
