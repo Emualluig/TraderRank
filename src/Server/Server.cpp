@@ -348,6 +348,8 @@ public:
 	virtual std::vector<std::vector<float>> get_portfolio_table() const noexcept = 0;
 	virtual void reset_user_portfolio(UserID user_id) = 0;
 	virtual float add_to_security(UserID user_id, SecurityID security_1, float addition_1) = 0; // May throw
+	virtual float multiply_to_security(UserID user_id, SecurityID security_1, float multiplier_1) = 0; // May throw
+	virtual float multiply_to_security_if_negative(UserID user_id, SecurityID security_1, float multiplier_1) = 0; // May throw
 	virtual FloatPair add_to_two_securities(UserID user_id, SecurityID security_1, float addition_1, SecurityID security_2, float addition_2) = 0; // May throw
 	virtual float multiply_and_add_1_to_2(UserID user_id, SecurityID security_1, SecurityID security_2, float multiply) = 0; // May throw
 	virtual float multiply_and_add_1_to_2_and_set_1(UserID user_id, SecurityID security_1, SecurityID security_2, float multiply, float set_value) = 0; // May throw
@@ -455,6 +457,42 @@ public:
 
 		auto& ref = data[user_id * columns + security_1];
 		ref += addition_1;
+		return ref;
+	}
+
+	// `security_1 *= multiplier_1`
+	// returns: the new value of the security in the portfolio
+	float multiply_to_security(UserID user_id, SecurityID security_1, float multiplier_1) override {
+		if (user_id >= user_count) {
+			throw IDNotFoundError(fmt::format("Could not find user_id: `{}`.", user_id));
+		}
+		if (security_1 >= columns) {
+			throw IDNotFoundError(fmt::format("Could not find security_1: `{}`.", security_1));
+		}
+		auto read_lock = std::shared_lock(data_mutex);
+		auto user_lock = std::unique_lock(user_mutexes[user_id]);
+
+		auto& ref = data[user_id * columns + security_1];
+		ref *= multiplier_1;
+		return ref;
+	}
+
+	// `security_1 *= multiplier_1` if `security_1 < 0`
+	// returns: the new value of the security in the portfolio
+	float multiply_to_security_if_negative(UserID user_id, SecurityID security_1, float multiplier_1) override {
+		if (user_id >= user_count) {
+			throw IDNotFoundError(fmt::format("Could not find user_id: `{}`.", user_id));
+		}
+		if (security_1 >= columns) {
+			throw IDNotFoundError(fmt::format("Could not find security_1: `{}`.", security_1));
+		}
+		auto read_lock = std::shared_lock(data_mutex);
+		auto user_lock = std::unique_lock(user_mutexes[user_id]);
+
+		auto& ref = data[user_id * columns + security_1];
+		if (ref < 0.0) {
+			ref *= multiplier_1;
+		}
 		return ref;
 	}
 
@@ -1092,6 +1130,12 @@ public:
 	float add_to_security(UserID uid, SecurityID sid1, float add1) override {
 		PYBIND11_OVERRIDE_PURE(float, IPortfolioManager, add_to_security, uid, sid1, add1);
 	}
+	float multiply_to_security(UserID uid, SecurityID sid1, float mult1) override {
+		PYBIND11_OVERRIDE_PURE(float, IPortfolioManager, multiply_to_security, uid, sid1, mult1);
+	}
+	float multiply_to_security_if_negative(UserID uid, SecurityID sid1, float mult1) override {
+		PYBIND11_OVERRIDE_PURE(float, IPortfolioManager, multiply_to_security_if_negative, uid, sid1, mult1);
+	}
 	FloatPair add_to_two_securities(UserID uid, SecurityID s1, float a1, SecurityID s2, float a2) override {
 		PYBIND11_OVERRIDE_PURE(FloatPair, IPortfolioManager, add_to_two_securities, uid, s1, a1, s2, a2);
 	}
@@ -1216,9 +1260,12 @@ PYBIND11_MODULE(Server, m) {
 
 	py::class_<IPortfolioManager, PyIPortfolioManager, std::shared_ptr<IPortfolioManager>>(m, "IPortfolioManager")
 		.def(py::init<>())
+		.def("get_user_count", &IPortfolioManager::get_user_count)
 		.def("get_portfolio_table", &IPortfolioManager::get_portfolio_table)
 		.def("reset_user_portfolio", &IPortfolioManager::reset_user_portfolio, py::arg("user_id"))
-		.def("add_to_security", &IPortfolioManager::add_to_security, py::arg("user_id"), py::arg("security_id"), py::arg("addition"))
+		.def("add_to_security", &IPortfolioManager::add_to_security, py::arg("user_id"), py::arg("security_1"), py::arg("addition_1"))
+		.def("multiply_to_security", &IPortfolioManager::multiply_to_security, py::arg("user_id"), py::arg("security_1"), py::arg("multiplier_1"))
+		.def("multiply_to_security_if_negative", &IPortfolioManager::multiply_to_security, py::arg("user_id"), py::arg("security_1"), py::arg("multiplier_1"))
 		.def("add_to_two_securities", &IPortfolioManager::add_to_two_securities, py::arg("user_id"), py::arg("security_1"), py::arg("addition_1"), py::arg("security_2"), py::arg("addition_2"))
 		.def("multiply_and_add_1_to_2", &IPortfolioManager::multiply_and_add_1_to_2, py::arg("user_id"), py::arg("security_1"), py::arg("security_2"), py::arg("multiply"))
 		.def("multiply_and_add_1_to_2_and_set_1", &IPortfolioManager::multiply_and_add_1_to_2_and_set_1,
