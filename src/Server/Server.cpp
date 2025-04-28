@@ -14,6 +14,7 @@
 #include <unordered_map>
 #include <set>
 #include <unordered_set>
+#include <functional>
 #include <exception>
 #include <stdexcept>
 #include <source_location>
@@ -25,6 +26,7 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 #include <pybind11/stl_bind.h>
+#include <pybind11/functional.h>
 
 namespace py = pybind11;
 
@@ -353,6 +355,8 @@ public:
 	virtual FloatPair add_to_two_securities(UserID user_id, SecurityID security_1, float addition_1, SecurityID security_2, float addition_2) = 0; // May throw
 	virtual float multiply_and_add_1_to_2(UserID user_id, SecurityID security_1, SecurityID security_2, float multiply) = 0; // May throw
 	virtual float multiply_and_add_1_to_2_and_set_1(UserID user_id, SecurityID security_1, SecurityID security_2, float multiply, float set_value) = 0; // May throw
+
+	//virtual void lock_with_callback(UserID user_id, std::function<void(void)> callback) = 0; // May throw
 };
 
 class ISecurity {
@@ -1087,6 +1091,104 @@ namespace GenericSecurities {
 			portfolio->add_to_two_securities(seller, stock_id, -quantity, cad_id, price * quantity);
 		}
 	};
+
+	class MarginCash : public ISecurity {
+		SecurityTicker ticker;
+		float margin_interest_rate;
+		float starting_cash;
+	public:
+		explicit MarginCash(const SecurityTicker& ticker, float margin_interest_rate, float starting_cash) : ticker{ ticker }, margin_interest_rate{ margin_interest_rate }, starting_cash{ starting_cash } {}
+
+		// Inherited via ISecurity
+		bool is_tradeable() override
+		{
+			return false;
+		}
+		void before_step(ISimulation& simulation, std::shared_ptr<IPortfolioManager> portfolio) override {}
+		void after_step(ISimulation& simulation, std::shared_ptr<IPortfolioManager> portfolio) override {
+			auto dt = simulation.get_dt();
+			auto margin_cash_id = simulation.get_security_id(ticker);
+			for (UserID user_id = 0; user_id < portfolio->get_user_count(); user_id++) {
+				portfolio->multiply_to_security_if_negative(user_id, margin_cash_id, 1 + dt * margin_interest_rate);
+			}
+		}
+		void on_simulation_start(ISimulation& simulation, std::shared_ptr<IPortfolioManager> portfolio) override {
+			auto margin_cash_id = simulation.get_security_id(ticker);
+			for (UserID user_id = 0; user_id < portfolio->get_user_count(); user_id++) {
+				portfolio->add_to_security(user_id, margin_cash_id, starting_cash);
+			}
+		}
+		void on_simulation_end(ISimulation& simulation, std::shared_ptr<IPortfolioManager> portfolio) override {}
+		void on_trade_executed(
+			ISimulation& simulation, std::shared_ptr<IPortfolioManager> portfolio,
+			UserID buyer, UserID seller, float price, float quantity
+		) override {
+		}
+	};
+
+	class DividendStock : public ISecurity {
+		SecurityTicker ticker;
+		SecurityTicker currency;
+		std::function<float(uint32_t)> dividend_function;
+	public:
+		explicit DividendStock(
+			const SecurityTicker& ticker, 
+			const SecurityTicker& currency,
+			const std::function<float(uint32_t)> dividend_function
+		) : ticker{ ticker }, currency{ currency }, dividend_function{ dividend_function } {
+		}
+
+		// Inherited via ISecurity
+		bool is_tradeable() override
+		{
+			return true;
+		}
+		void before_step(ISimulation& simulation, std::shared_ptr<IPortfolioManager> portfolio) override {}
+		void after_step(ISimulation& simulation, std::shared_ptr<IPortfolioManager> portfolio) override {
+			auto dt = simulation.get_dt();
+			auto dividend = dividend_function(simulation.get_tick());
+			auto stock_id = simulation.get_security_id(ticker);
+			auto currency_id = simulation.get_security_id(currency);
+
+			for (UserID user_id = 0; user_id < portfolio->get_user_count(); user_id++) {
+				portfolio->multiply_and_add_1_to_2(user_id, stock_id, currency_id, dt * dividend);
+			}
+		}
+		void on_simulation_start(ISimulation& simulation, std::shared_ptr<IPortfolioManager> portfolio) override {}
+		void on_simulation_end(ISimulation& simulation, std::shared_ptr<IPortfolioManager> portfolio) override {
+			// At the end convert to CAD at midpoint price, or `100.0f`
+			auto stock_id = simulation.get_security_id(ticker);
+			auto currency_id = simulation.get_security_id(currency);
+
+			auto close_bid_price = 100.0f;
+			auto close_ask_price = 100.0f;
+			if (simulation.get_bid_count(stock_id) > 0) {
+				close_bid_price = simulation.get_top_bid(stock_id).price;
+			}
+			if (simulation.get_ask_count(stock_id) > 0) {
+				close_ask_price = simulation.get_top_ask(stock_id).price;
+			}
+
+			for (UserID index_user = 0; index_user < portfolio->get_user_count(); index_user++) {
+				portfolio->multiply_and_add_1_to_2_and_set_1(
+					index_user, stock_id, currency_id, (close_bid_price + close_ask_price) / 2.0f, 0.0f
+				);
+			}
+		}
+		void on_trade_executed(
+			ISimulation& simulation, std::shared_ptr<IPortfolioManager> portfolio,
+			UserID buyer, UserID seller, float price, float quantity
+		) override {
+			auto stock_id = simulation.get_security_id(ticker);
+			auto cad_id = simulation.get_security_id(currency);
+			// The buyer gets the stock, but losses money
+			portfolio->add_to_two_securities(buyer, stock_id, quantity, cad_id, -price * quantity);
+			// The seller losses the stock, but gets money
+			portfolio->add_to_two_securities(seller, stock_id, -quantity, cad_id, price * quantity);
+		}
+	};
+
+
 };
 
 class PyISecurity : public ISecurity {
@@ -1323,4 +1425,16 @@ PYBIND11_MODULE(Server, m) {
 		.def(py::init<const SecurityTicker&, const SecurityTicker&>(),
 			py::arg("ticker"),
 			py::arg("currency"));
+
+	py::class_<GenericSecurities::MarginCash, ISecurity, std::shared_ptr<GenericSecurities::MarginCash>>(generic, "MarginCash")
+		.def(py::init<const SecurityTicker&, float, float>(),
+			py::arg("ticker"),
+			py::arg("margin_interest_rate"),
+			py::arg("starting_cash"));
+
+	py::class_<GenericSecurities::DividendStock, ISecurity, std::shared_ptr<GenericSecurities::DividendStock>>(generic, "DividendStock")
+		.def(py::init<const SecurityTicker&, const SecurityTicker&, const std::function<float(uint32_t)>>(),
+			py::arg("ticker"),
+			py::arg("currency"),
+			py::arg("dividend_function"));
 }
