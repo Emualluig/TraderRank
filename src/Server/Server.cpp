@@ -856,7 +856,7 @@ protected:
 					}
 				}
 				else if (index == 3) {
-					
+					assert(false);
 				}
 				else {
 					assert(false);
@@ -943,6 +943,14 @@ public:
 		auto order_queue_lock = std::unique_lock(order_queue_mutex);
 		for (auto& [security_id, vec] : submitted_orders) {
 			vec.clear();
+		}
+		for (auto& order_book : order_books) {
+			while (order_book.ask_size() != 0) {
+				order_book.pop_top_ask();
+			}
+			while (order_book.bid_size() != 0) {
+				order_book.pop_top_bid();
+			}
 		}
 		for (UserID user_id = 0; user_id < user_portfolio_manager->get_user_count(); user_id++) {
 			user_portfolio_manager->reset_user_portfolio(user_id);
