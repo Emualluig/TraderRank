@@ -1,2 +1,6 @@
 *.zip
 tensorboard_logs/
+v3
+v4
+v5
+rl01

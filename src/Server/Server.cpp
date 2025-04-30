@@ -78,7 +78,13 @@ struct MarketOrder {
 	OrderAction action;
 	float volume;
 };
-using OrderVariant = std::variant<LimitOrder, CancelOrder, MarketOrder>;
+struct QueueCapturingMarketOrder {
+	UserID user_id;
+	OrderID order_id;
+	OrderAction action;
+	float volume;
+};
+using OrderVariant = std::variant<LimitOrder, CancelOrder, MarketOrder, QueueCapturingMarketOrder>;
 
 // (bid, ask) pair of depths
 using BookDepth = std::pair<std::map<float, float>, std::map<float, float>>;
@@ -228,6 +234,7 @@ struct SimulationStepResult {
 };
 
 class ISecurity;
+class IPortfolioManager;
 
 class ISimulation {
 protected:
@@ -310,6 +317,7 @@ public:
 	virtual UserID add_user(const Username& username) = 0; // May throw
 	virtual uint32_t get_user_count() const noexcept = 0;
 	virtual std::vector<float> get_user_portfolio(UserID user_id) const = 0; // May throw
+	virtual void do_portfolio_callback(std::function<void(std::shared_ptr<IPortfolioManager>)> callback) = 0; // May throw
 
 	// Simulation order book information
 	virtual const LimitOrder& get_top_bid(SecurityID security_id) const = 0; // May throw
@@ -610,6 +618,9 @@ public:
 		}
 		return user_portfolio_manager->get_portfolio_table()[user_id];
 	}
+	void do_portfolio_callback(std::function<void(std::shared_ptr<IPortfolioManager>)> callback) override {
+		callback(user_portfolio_manager);
+	}
 
 	// Simulation order book information
 	const LimitOrder& get_top_bid(SecurityID security_id) const override {
@@ -843,6 +854,9 @@ protected:
 							break;
 						}
 					}
+				}
+				else if (index == 3) {
+					
 				}
 				else {
 					assert(false);
@@ -1188,7 +1202,6 @@ namespace GenericSecurities {
 		}
 	};
 
-
 };
 
 class PyISecurity : public ISecurity {
@@ -1261,6 +1274,9 @@ public:
 	}
 	std::vector<float> get_user_portfolio(UserID user_id) const override {
 		PYBIND11_OVERRIDE_PURE(std::vector<float>, ISimulation, get_user_portfolio, user_id);
+	}
+	void do_portfolio_callback(std::function<void(std::shared_ptr<IPortfolioManager>)> callback) override {
+		PYBIND11_OVERRIDE_PURE(void, ISimulation, do_portfolio_callback, callback);
 	}
 	const LimitOrder& get_top_bid(SecurityID sid) const override {
 		PYBIND11_OVERRIDE_PURE(const LimitOrder&, ISimulation, get_top_bid, sid);
@@ -1380,6 +1396,7 @@ PYBIND11_MODULE(Server, m) {
 		.def("get_security_ticker", &ISimulation::get_security_ticker, py::arg("security_id"))
 		.def("get_security_id", &ISimulation::get_security_id, py::arg("security_ticker"))
 		.def("get_user_id_to_username", &ISimulation::get_user_id_to_username)
+		.def("do_portfolio_callback", &ISimulation::do_portfolio_callback, py::arg("callback"))
 		.def("get_securities_count", &ISimulation::get_securities_count)
 		.def("get_dt", &ISimulation::get_dt)
 		.def("get_t", &ISimulation::get_t)
