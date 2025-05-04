@@ -1,5 +1,5 @@
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import dataclasses
 import json
 from typing import Any, List, Tuple, Union
@@ -10,6 +10,14 @@ import python_modules.Server as Server
 from abc import ABC, abstractmethod
 from threading import Thread, Lock
 from enum import Enum
+
+def limit_order_convert(order: Server.LimitOrder):
+    return {
+        "order_id": order.order_id,
+        "price": order.price,
+        "user_id": order.user_id,
+        "volume": order.volume
+    }
 
 def volatility_strength_func(tick: int, t: float, dt: float):
     if 0 <= tick < 200:
@@ -234,19 +242,16 @@ class SimulationBiotech:
             
             done = not results.has_next_step
                 
-            def convert(input: List[Server.LimitOrder]) -> List[dict[str, Any]]:
-                return [{ "order_id": x.order_id, "price": x.price, "user_id": x.user_id, "volume": x.volume } for x in input]
-            
-            retobj = {
-                "step": results.current_step,
-                "cancelled_orders": {security: list(order_ids) for security, order_ids in results.cancelled_orders.items()},
-                "partially_transacted_orders": {security: list(order_ids) for security, order_ids in results.partially_transacted_orders.items()},
-                "fully_transacted_orders": {security: list(order_ids) for security, order_ids in results.fully_transacted_orders.items()},
-                "portfolios": results.portfolios,
-                "user_id_to_username_map": results.user_id_to_username_map,
-                "order_book_per_security": {security: { "bids": convert(order_book[0]), "asks": convert(order_book[1]) } for security, order_book in results.order_book_per_security.items()}
-            }
-            await broadcast(json.dumps(retobj))
+            message = UpdateMessage(
+                step=results.current_step,
+                cancelled_orders={security: list(order_ids) for security, order_ids in results.cancelled_orders.items()},
+                partially_transacted_orders={security: list(order_ids) for security, order_ids in results.partially_transacted_orders.items()},
+                fully_transacted_orders={security: list(order_ids) for security, order_ids in results.fully_transacted_orders.items()},
+                portfolios=results.portfolios,
+                user_id_to_username_map=results.user_id_to_username_map,
+                order_book_per_security={security: BidAskBook(bids=[limit_order_convert(x) for x in order_book[0]], asks=[limit_order_convert(x) for x in order_book[1]]) for security, order_book in results.order_book_per_security.items()}
+            )
+            await broadcast(message)
             pass
         if done:
             self.reset()
@@ -279,30 +284,35 @@ class SimulationBiotech:
     pass
 
 # Shared global state
-clients: dict[str, WebSocketServerProtocol] = {}  # client_id -> websocket
-client_to_user_id: dict[str, int] = {}
+client_id_to_socket: dict[int, WebSocketServerProtocol] = {}  # client_id -> websocket
+client_id_to_user_id: dict[int, int] = {}
 simulation = SimulationBiotech()
 simulation_running = False
 simulation_task = None
 
 @dataclass
-class SyncMessage:
-    type_ = "sync"
+class BidAskBook:
+    bids: list[dict[str, Any]]
+    asks: list[dict[str, Any]]
+    pass
+
+@dataclass
+class BaseMessage:
+    type_: str
+
+@dataclass
+class SyncMessage(BaseMessage):
+    type_: str = field(init=False, default="sync")
     client_id: int
     securities: list[str]
     security_to_id: dict[str, int]
     tradable_securities_id: list[int]
+    order_book_per_security: dict[str, BidAskBook]
     pass
 
 @dataclass
-class BidAskBook:
-    bids: list[Server.LimitOrder]
-    asks: list[Server.LimitOrder]
-    pass
-
-@dataclass
-class UpdateMessage:
-    type_ = "update"
+class UpdateMessage(BaseMessage):
+    type_: str = field(init=False, default="update")
     step: int
     cancelled_orders: dict[str, list[int]]
     fully_transacted_orders: dict[str, list[int]]
@@ -315,12 +325,15 @@ class UpdateMessage:
 class EnhancedJSONEncoder(json.JSONEncoder):
     def default(self, o):
         if dataclasses.is_dataclass(o):
-            return dataclasses.asdict(o)
+            return dataclasses.asdict(o)     
         return super().default(o)
 
 async def broadcast(message: Union[SyncMessage, UpdateMessage]):
-    for client in clients.values():
+    for client in client_id_to_socket.values():
         await client.send(json.dumps(message, cls=EnhancedJSONEncoder))
+
+async def send(websocket: WebSocketServerProtocol, message: Union[SyncMessage, UpdateMessage]):
+    await websocket.send(json.dumps(message, cls=EnhancedJSONEncoder))
 
 async def step_loop():
     while True:
@@ -332,13 +345,26 @@ async def step_loop():
         await asyncio.sleep(0.25)
 
 async def handle_client(websocket: WebSocketServerProtocol, path: str):
-    client_id = str(id(websocket))
-    clients[client_id] = websocket
-    client_to_user_id[client_id] = simulation.register_user(client_id)
+    client_id = id(websocket)
+    client_id_to_socket[client_id] = websocket
+    client_id_to_user_id[client_id] = simulation.register_user(f"USER-{client_id}")
     print(f"[Server] Client {client_id} connected.")
     
     try:
-        await websocket.send(json.dumps({ "client_id": client_id }))
+        all_security_ids = [simulation.simulation.get_security_id(ticker) for ticker in simulation.simulation.get_all_tickers()]
+        w1 = [(simulation.simulation.get_security_ticker(x), simulation.simulation.get_order_book(x)) for x in all_security_ids]
+        w2 = {ticker: BidAskBook(bids=[limit_order_convert(o) for o in x[0]], asks=[limit_order_convert(o) for o in x[1]]) for (ticker, x) in w1}
+        
+        message = SyncMessage(
+            client_id=client_id, 
+            securities=simulation.simulation.get_all_tickers(),
+            security_to_id={ 
+                w: simulation.simulation.get_security_id(w) for w in simulation.simulation.get_all_tickers() 
+            },
+            tradable_securities_id=[simulation.simulation.get_security_id("BIOTECH")],
+            order_book_per_security=w2
+        )
+        await send(websocket, message)
         
         async for message in websocket:
             if simulation_running:
@@ -348,7 +374,7 @@ async def handle_client(websocket: WebSocketServerProtocol, path: str):
     except Exception as e:
         print(f"[Server] Received exception from {client_id}: {e}")
     finally:
-        del clients[client_id]
+        del client_id_to_socket[client_id]
 
 async def start_command():
     global simulation_running
