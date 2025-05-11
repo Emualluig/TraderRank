@@ -1,4 +1,4 @@
-import { GLOBAL_MARKET_STATE, WSMessage } from './core';
+import { GLOBAL_MARKET_STATE, Message } from './core';
 import { PanelBook } from './Panels/PanelBook';
 import { PanelManager } from './Panels/PanelManager';
 import { PanelText } from './Panels/PanelText';
@@ -22,21 +22,43 @@ WS.onmessage = (event) => {
     if (json?.["type_"] === undefined) {
       throw new Error("Data was not matching the expected format.");
     }
-    const message = json as WSMessage;
-    if (message.type_ === "sync") {
-      GLOBAL_MARKET_STATE.has_received_sync_message = true;
-      GLOBAL_MARKET_STATE.sync_message = message;
+    const message = json as Message;
+    if (message.type_ === "login_request") {
+      throw new Error("Shouldn't receive messages of this type.");
+    } else if (message.type_ === "login_response") {
+      GLOBAL_MARKET_STATE.client_id = message.client_id;
+
       for (const panel of PANEL_MANAGER.ValuesPanel()) {
-        panel.onSync(message);
+        panel.onLoginResponse(message);
       }
-      console.log("ID:", message.client_id);
-    } else if (message.type_ === "update") {
-      GLOBAL_MARKET_STATE.update_message = message;
+    } else if (message.type_ === "simulation_load") {
+      GLOBAL_MARKET_STATE.simulation_state = message.simulation_state;
+      GLOBAL_MARKET_STATE.order_book_per_security = message.order_book_per_security;
+      GLOBAL_MARKET_STATE.portfolio = message.portfolio;
+      GLOBAL_MARKET_STATE.securities = message.securities;
+      GLOBAL_MARKET_STATE.step = message.step;
+      GLOBAL_MARKET_STATE.tradeable_securities = message.tradeable_securities;
+
       for (const panel of PANEL_MANAGER.ValuesPanel()) {
-        panel.onUpdate(message);
+        panel.onSimulationLoad(message);
+      }
+    } else if (message.type_ === "simulation_update") {
+      GLOBAL_MARKET_STATE.simulation_state = message.simulation_state;
+      GLOBAL_MARKET_STATE.step = message.step;
+
+      for (const panel of PANEL_MANAGER.ValuesPanel()) {
+        panel.onSimulationUpdate(message);
+      }
+    } else if (message.type_ === "market_update") {
+      GLOBAL_MARKET_STATE.order_book_per_security = message.order_book_per_security;
+      GLOBAL_MARKET_STATE.portfolio = message.portfolio;
+      GLOBAL_MARKET_STATE.step = message.step;
+
+      for (const panel of PANEL_MANAGER.ValuesPanel()) {
+        panel.onMarketUpdate(message);
       }
     } else {
-      throw new Error(`Received unknown message type: "${(message as any)?.type}".`);
+      throw new Error("Unknown message type.");
     }
   } catch (err) {
     console.log("Failed decoding WS data to JSON.");

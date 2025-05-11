@@ -50,22 +50,4 @@ export interface MessageMarketUpdate extends MessageBase {
 export type Message = MessageLoginRequest|MessageLoginResponse|
     MessageSimulationLoad|MessageSimulationUpdate|MessageMarketUpdate
 
-type Nullable<T> = { [K in keyof T]: T[K] | null };
-interface IGLOBAL_MARKET_STATE {
-    client_id: UserID;
-    simulation_state: SimulationState;
-    step: number;
-    securities: Ticker[];
-    tradeable_securities: Ticker[];
-    order_book_per_security: Record<Ticker, OrderBook>;
-    portfolio: Record<Ticker, number>;
-}
-export const GLOBAL_MARKET_STATE: Nullable<IGLOBAL_MARKET_STATE> = {
-    client_id: null,
-    step: null,
-    securities: null,
-    tradeable_securities: null,
-    order_book_per_security: null,
-    portfolio: null,
-    simulation_state: null
-};
+    

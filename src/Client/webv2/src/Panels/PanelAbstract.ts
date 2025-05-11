@@ -1,6 +1,6 @@
 import interact from 'interactjs';
 import { PanelManager } from './PanelManager';
-import { WSMessageSync, WSMessageUpdate } from '../core';
+import { MessageLoginResponse, MessageMarketUpdate, MessageSimulationLoad, MessageSimulationUpdate } from '../core';
 
 export interface PanelElement extends HTMLElement, IPanelElement {}
 
@@ -223,6 +223,8 @@ export abstract class PanelAbstract {
         });
     }
 
-    public abstract onSync(message: WSMessageSync): void;
-    public abstract onUpdate(message: WSMessageUpdate): void;
+    public abstract onLoginResponse(message: MessageLoginResponse): void;
+    public abstract onSimulationLoad(message: MessageSimulationLoad): void;
+    public abstract onSimulationUpdate(message: MessageSimulationUpdate): void;
+    public abstract onMarketUpdate(message: MessageMarketUpdate): void;
 }

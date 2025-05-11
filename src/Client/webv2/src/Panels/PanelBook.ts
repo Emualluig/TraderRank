@@ -1,4 +1,4 @@
-import { GLOBAL_MARKET_STATE, OrderBook, WSMessageSync, WSMessageUpdate } from "../core";
+import { GLOBAL_MARKET_STATE, MessageLoginResponse, MessageMarketUpdate, MessageSimulationLoad, MessageSimulationUpdate, OrderBook, WSMessageSync, WSMessageUpdate } from "../core";
 import { PanelAbstract } from "./PanelAbstract";
 import { PanelManager } from "./PanelManager";
 
@@ -52,6 +52,19 @@ interface LimitOrderRow extends HTMLTableRowElement {
 }
 
 export class PanelBook extends PanelAbstract {
+    public onLoginResponse(message: MessageLoginResponse): void {
+        throw new Error("Method not implemented.");
+    }
+    public onSimulationLoad(message: MessageSimulationLoad): void {
+        throw new Error("Method not implemented.");
+    }
+    public onSimulationUpdate(message: MessageSimulationUpdate): void {
+        throw new Error("Method not implemented.");
+    }
+    public onMarketUpdate(message: MessageMarketUpdate): void {
+        throw new Error("Method not implemented.");
+    }
+
     private selector: SecuritySelectDropdown;
     private tableBodyBids: HTMLTableSectionElement;
     private tableBodyAsks: HTMLTableSectionElement;
