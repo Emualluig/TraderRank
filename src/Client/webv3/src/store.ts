@@ -1,29 +1,128 @@
 import { create } from "zustand";
 import { immer } from "zustand/middleware/immer";
+import type { PanelType } from "./components/Panel";
+import type {
+  MessageProcessor,
+  News,
+  OrderBook,
+  SecurityInfo,
+  SimulationState,
+  Ticker,
+  Transaction,
+  UserID,
+  Username,
+} from "./types";
 
 interface Layout {
   workspaceX: number;
   workspaceY: number;
-  dragX: number;
-  dragY: number;
   width: number;
   height: number;
   zIndex: number;
+  minSize: Interact.Size;
+  maxSize: Interact.Size;
+  type: PanelType;
 }
 
-interface GlobalState {
+interface GlobalState extends MessageProcessor {
+  // Market state data
+  is_initialized: boolean;
+  tick: number;
+  max_tick: number;
+  client_id: UserID;
+  simulation_state: SimulationState;
+  all_securities: Ticker[];
+  tradeable_securities: Ticker[];
+  security_info: Record<Ticker, SecurityInfo>;
+  order_book_per_security: Record<Ticker, OrderBook>;
+  transactions: Record<Ticker, Transaction[]>;
+  user_id_to_username: Record<UserID, Username>;
+  portfolio: Record<Ticker, number>;
+  news: News[];
+
+  // Panel data
   topZ: number;
   bringToFront: (id: string) => void;
   panels: Record<string, Layout>;
-  createPanel: (id: string, x: number, y: number, w: number, h: number) => void;
+  createPanel: (
+    id: string,
+    x: number,
+    y: number,
+    w: number,
+    h: number,
+    minSize: Interact.Size,
+    maxSize: Interact.Size,
+    type: PanelType
+  ) => void;
   setPanelPosition: (id: string, x: number, y: number) => void;
-  setPanelDrag: (id: string, x: number, y: number) => void;
   setPanelSize: (id: string, w: number, h: number) => void;
   removePanel: (id: string) => void;
 }
 
 export const useGlobalStore = create<GlobalState>()(
   immer((set) => ({
+    is_initialized: false,
+    tick: 0,
+    max_tick: 0,
+    client_id: 0,
+    simulation_state: "paused",
+    all_securities: [],
+    tradeable_securities: [],
+    security_info: {},
+    order_book_per_security: {},
+    transactions: {},
+    user_id_to_username: {},
+    portfolio: {},
+    news: [],
+
+    processMessageLoginRequest: () => {
+      throw new Error("??");
+    },
+    processMessageLoginResponse: (msg) =>
+      set((state) => {
+        state.is_initialized = true;
+        state.client_id = msg.client_id;
+      }),
+    processMessageSimulationLoad: (msg) =>
+      set((state) => {
+        state.tick = msg.tick;
+        state.max_tick = msg.tick;
+        state.simulation_state = msg.simulation_state;
+        state.all_securities = msg.all_securities;
+        state.tradeable_securities = msg.tradeable_securities;
+        state.security_info = msg.security_info;
+        state.order_book_per_security = msg.order_book_per_security;
+        state.transactions = msg.transactions;
+        state.user_id_to_username = msg.user_id_to_username;
+        state.portfolio = msg.portfolio;
+        state.news = msg.news;
+      }),
+    processMessageSimulationUpdate: (msg) =>
+      set((state) => {
+        state.tick = msg.tick;
+        state.simulation_state = msg.simulation_state;
+      }),
+    processMessageMarketUpdate: (msg) =>
+      set((state) => {
+        state.tick = msg.tick;
+        state.order_book_per_security = msg.order_book_per_security;
+        for (const [ticker, transactions] of Object.entries(msg.new_transactions)) {
+          const current_transactions = state.transactions[ticker];
+          for (const transaction of transactions) {
+            current_transactions.push(transaction);
+          }
+        }
+        state.portfolio = msg.portfolio;
+        for (const news of msg.new_news) {
+          state.news.push(news);
+        }
+      }),
+    processMessageNewUserConnected: (msg) =>
+      set((state) => {
+        state.user_id_to_username[msg.user_id] = msg.username;
+      }),
+
+    // Panel items
     topZ: 0,
     bringToFront: (id) =>
       set((state) => {
@@ -33,17 +132,18 @@ export const useGlobalStore = create<GlobalState>()(
         }
       }),
     panels: {},
-    createPanel: (id, x, y, w, h) =>
+    createPanel: (id, x, y, w, h, minSize, maxSize, type) =>
       set((state) => {
         if (state.panels[id] === undefined) {
           state.panels[id] = {
             workspaceX: x,
             workspaceY: y,
-            dragX: x,
-            dragY: y,
             width: w,
             height: h,
             zIndex: state.topZ + 1,
+            minSize: minSize,
+            maxSize: maxSize,
+            type: type,
           };
           state.topZ += 1;
         }
@@ -53,13 +153,6 @@ export const useGlobalStore = create<GlobalState>()(
         if (state.panels[id]) {
           state.panels[id].workspaceX = x;
           state.panels[id].workspaceY = y;
-        }
-      }),
-    setPanelDrag: (id, x, y) =>
-      set((state) => {
-        if (state.panels[id]) {
-          state.panels[id].dragX = x;
-          state.panels[id].dragY = y;
         }
       }),
     setPanelSize: (id, w, h) =>

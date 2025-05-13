@@ -1,0 +1,5 @@
+@import "tailwindcss";
+
+.tb-divider {
+  @apply [&>tr]:divide-black [&>tr]:divide-solid [&>tr]:divide-x-1;
+}

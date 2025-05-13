@@ -2,6 +2,14 @@ import { useEffect, useRef } from "react";
 import interact from "interactjs";
 import { useGlobalStore } from "../store";
 
+export type PanelType =
+  | "OrderBook"
+  | "Chart"
+  | "Depth"
+  | "TradeBlotter"
+  | "TraderInfo"
+  | "Portfolio";
+
 interface PanelProps {
   id: string;
   title: string;
@@ -21,17 +29,23 @@ const doIntervalsOverlap = (
   return end1 >= start2 && end2 >= start1;
 };
 
+interface PanelElement extends HTMLDivElement {
+  dragX?: number;
+  dragY?: number;
+}
+
 export function Panel({ id, title, workspaceRef, children }: PanelProps) {
-  const panelRef = useRef<HTMLDivElement>(null);
-  const layout = useGlobalStore.getState().panels[id];
+  const panelRef = useRef<PanelElement>(null);
+  const { workspaceX, workspaceY, height, width, zIndex, minSize, maxSize } = useGlobalStore(
+    (s) => s.panels[id]
+  );
   const bringToFront = useGlobalStore((s) => s.bringToFront);
   const setPanelSize = useGlobalStore((s) => s.setPanelSize);
   const setPanelPosition = useGlobalStore((s) => s.setPanelPosition);
-  const setPanelDrag = useGlobalStore((s) => s.setPanelDrag);
   const removePanel = useGlobalStore((s) => s.removePanel);
 
-  const MIN_SIZE = { height: 90, width: 160 } satisfies Interact.Size;
-  const MAX_SIZE = { height: 500, width: 500 } satisfies Interact.Size;
+  const MIN_SIZE = minSize;
+  const MAX_SIZE = maxSize;
 
   useEffect(() => {
     if (!panelRef.current) return;
@@ -41,7 +55,7 @@ export function Panel({ id, title, workspaceRef, children }: PanelProps) {
         allowFrom: ".panel-title",
         modifiers: [
           interact.modifiers.restrictRect({
-            restriction: "#workspace",
+            restriction: workspaceRef.current!,
           }),
         ],
         listeners: {
@@ -49,7 +63,8 @@ export function Panel({ id, title, workspaceRef, children }: PanelProps) {
             const state = useGlobalStore.getState();
             const panels = state.panels;
             const current = panels[id];
-            setPanelDrag(id, current.workspaceX, current.workspaceY);
+            panelRef.current!.dragX = current.workspaceX;
+            panelRef.current!.dragY = current.workspaceY;
           },
           move: (event: Interact.DragEvent) => {
             const state = useGlobalStore.getState();
@@ -70,8 +85,8 @@ export function Panel({ id, title, workspaceRef, children }: PanelProps) {
             const selfWidth = selfRect.width;
             const selfHeight = selfRect.height;
 
-            const dragX = current.dragX + event.dx;
-            const dragY = current.dragY + event.dy;
+            const dragX = panelRef.current!.dragX! + event.dx;
+            const dragY = panelRef.current!.dragY! + event.dy;
 
             let finalX = dragX;
             let finalY = dragY;
@@ -115,7 +130,8 @@ export function Panel({ id, title, workspaceRef, children }: PanelProps) {
               }
             }
 
-            setPanelDrag(id, dragX, dragY);
+            panelRef.current!.dragX = dragX;
+            panelRef.current!.dragY = dragY;
             setPanelPosition(id, finalX, finalY);
           },
         },
@@ -132,15 +148,10 @@ export function Panel({ id, title, workspaceRef, children }: PanelProps) {
           }),
         ],
         listeners: {
-          start: () => {
-            const state = useGlobalStore.getState();
-            const panels = state.panels;
-            const current = panels[id];
-            setPanelDrag(id, current.width, current.height);
-          },
           move: (event: Interact.ResizeEvent) => {
             // TODO: Add snapping to opposite side if self panel is edge to edge with
             // another edge
+            // TODO: Add snapping to same edge overlap
             const state = useGlobalStore.getState();
             const panels = state.panels;
             const current = panels[id];
@@ -164,6 +175,13 @@ export function Panel({ id, title, workspaceRef, children }: PanelProps) {
             let finalH = current.height + event.deltaRect!.height;
             let finalX = current.workspaceX;
             const finalY = current.workspaceY;
+
+            // We are moving the left edge, shift the X to the left, we expand on the right edge
+            // This anchors the right edge but moves the left
+            if (event.edges?.left) {
+              finalX += event.delta.x;
+            }
+
             if (!event.shiftKey) {
               for (const [otherId, other] of Object.entries(panels)) {
                 if (otherId === id) {
@@ -184,11 +202,6 @@ export function Panel({ id, title, workspaceRef, children }: PanelProps) {
                   finalW = current.width + (otherLeftX - selfRightX);
                 }
 
-                // We are moving the left edge, shift the X to the left, we expand on the right edge
-                // This anchors the right edge but moves the left
-                if (event.edges?.left) {
-                  finalX += event.delta.x;
-                }
                 // Self right edge into other left edge
                 if (
                   doIntervalsOverlap(otherTopY, otherBottomY, selfTopY, selfBottomY) &&
@@ -199,6 +212,7 @@ export function Panel({ id, title, workspaceRef, children }: PanelProps) {
                   finalW = current.width + (selfLeftX - otherRightX);
                 }
 
+                // TODO: Do adjustment for top resize, must adjust `finalY`
                 // Self bottom into other top
                 if (
                   doIntervalsOverlap(otherLeftX, otherRightX, selfLeftX, selfRightX) &&
@@ -212,7 +226,6 @@ export function Panel({ id, title, workspaceRef, children }: PanelProps) {
 
             setPanelSize(id, finalW, finalH);
             setPanelPosition(id, finalX, finalY);
-            setPanelDrag(id, dragX, dragY);
           },
         },
       });
@@ -220,18 +233,18 @@ export function Panel({ id, title, workspaceRef, children }: PanelProps) {
     return () => {
       interactable.unset();
     };
-  }, [id]);
+  }, []);
 
   return (
     <div
       ref={panelRef}
       className='absolute bg-white border shadow-md flex flex-col select-none'
       style={{
-        left: layout.workspaceX,
-        top: layout.workspaceY,
-        width: layout.width,
-        height: layout.height,
-        zIndex: layout.zIndex,
+        left: workspaceX,
+        top: workspaceY,
+        width: width,
+        height: height,
+        zIndex: zIndex,
       }}
       onMouseDown={() => bringToFront(id)}
     >
