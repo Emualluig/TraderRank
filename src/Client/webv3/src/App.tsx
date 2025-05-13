@@ -9,7 +9,7 @@ let nextId = 1;
 
 type PanelType = "OrderBook" | "Chart" | "Depth" | "TradeBlotter" | "TraderInfo" | "Portfolio";
 
-function renderPanelContent(id: string, type: PanelType) {
+function renderPanelContent(type: PanelType) {
   if (type === "OrderBook") {
     return <OrderBookPanel />;
   } else if (type === "TraderInfo") {
@@ -26,8 +26,12 @@ function App() {
   const tick = useGlobalStore((s) => s.tick);
   const maxTick = useGlobalStore((s) => s.max_tick);
   const state = useGlobalStore((s) => s.simulation_state);
-  const unreadNewCount: number = 3;
-  const unreadChatCount: number = 10;
+  const unreadNewCount: number = useGlobalStore((s) =>
+    s.news_read.reduce((acc, v) => acc + (v ? 0 : 1), 0)
+  );
+  const unreadChatCount: number = useGlobalStore((s) =>
+    s.chat_read.reduce((acc, v) => acc + (v ? 0 : 1), 0)
+  );
 
   const addPanel = (type: PanelType) => {
     const id = `${type}-${nextId++}`;
@@ -73,7 +77,7 @@ function App() {
       <div className='grow bg-gray-400 relative z-0 overflow-clip' ref={workspaceRef}>
         {Object.entries(panels).map(([id, layout]) => (
           <Panel id={id} key={id} title={`Panel ${id}`} workspaceRef={workspaceRef}>
-            {renderPanelContent(id, layout.type)}
+            {renderPanelContent(layout.type)}
           </Panel>
         ))}
       </div>

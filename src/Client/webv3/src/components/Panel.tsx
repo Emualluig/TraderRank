@@ -59,18 +59,13 @@ export function Panel({ id, title, workspaceRef, children }: PanelProps) {
           }),
         ],
         listeners: {
-          start: () => {
-            const state = useGlobalStore.getState();
-            const panels = state.panels;
-            const current = panels[id];
-            panelRef.current!.dragX = current.workspaceX;
-            panelRef.current!.dragY = current.workspaceY;
+          start: (event: Interact.DragEvent) => {
+            panelRef.current!.dragX = parseInt(event.target.style.left);
+            panelRef.current!.dragY = parseInt(event.target.style.top);
           },
           move: (event: Interact.DragEvent) => {
             const state = useGlobalStore.getState();
             const panels = state.panels;
-            const current = panels[id];
-            if (!current) return;
 
             const workspaceRect = workspaceRef.current!.getBoundingClientRect();
             const workspaceRectX = workspaceRect.x;

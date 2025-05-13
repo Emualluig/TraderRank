@@ -39,6 +39,9 @@ interface GlobalState extends MessageProcessor {
   user_id_to_username: Record<UserID, Username>;
   portfolio: Record<Ticker, number>;
   news: News[];
+  news_read: boolean[];
+  chat: Array<{ user_id: UserID; text: string }>;
+  chat_read: boolean[];
 
   // Panel data
   topZ: number;
@@ -74,6 +77,9 @@ export const useGlobalStore = create<GlobalState>()(
     user_id_to_username: {},
     portfolio: {},
     news: [],
+    news_read: [],
+    chat: [],
+    chat_read: [],
 
     processMessageLoginRequest: () => {
       throw new Error("??");
@@ -96,6 +102,9 @@ export const useGlobalStore = create<GlobalState>()(
         state.user_id_to_username = msg.user_id_to_username;
         state.portfolio = msg.portfolio;
         state.news = msg.news;
+        state.news_read = msg.news.map(() => false);
+        state.chat = [];
+        state.chat_read = [];
       }),
     processMessageSimulationUpdate: (msg) =>
       set((state) => {
@@ -115,11 +124,17 @@ export const useGlobalStore = create<GlobalState>()(
         state.portfolio = msg.portfolio;
         for (const news of msg.new_news) {
           state.news.push(news);
+          state.news_read.push(false);
         }
       }),
     processMessageNewUserConnected: (msg) =>
       set((state) => {
         state.user_id_to_username[msg.user_id] = msg.username;
+      }),
+    processMessageChatMessageReceived: (msg) =>
+      set((state) => {
+        state.chat.push(msg);
+        state.chat_read.push(false);
       }),
 
     // Panel items

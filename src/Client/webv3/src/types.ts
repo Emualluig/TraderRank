@@ -41,7 +41,8 @@ type MessageType =
   | "simulation_load"
   | "simulation_update"
   | "market_update"
-  | "new_user_connected";
+  | "new_user_connected"
+  | "chat_message_received";
 interface MessageBase {
   type_: MessageType;
 }
@@ -57,6 +58,7 @@ export interface MessageSimulationLoad extends MessageBase {
   type_: "simulation_load";
   simulation_state: SimulationState;
   tick: number;
+  max_tick: number;
   all_securities: Ticker[];
   tradeable_securities: Ticker[];
   security_info: Record<Ticker, SecurityInfo>;
@@ -84,6 +86,11 @@ export interface MessageNewUserConnected extends MessageBase {
   user_id: UserID;
   username: Username;
 }
+export interface MessageChatMessageReceived extends MessageBase {
+  type_: "chat_message_received";
+  user_id: UserID;
+  text: string;
+}
 
 type MessageMap = {
   MessageLoginRequest: MessageLoginRequest;
@@ -92,6 +99,7 @@ type MessageMap = {
   MessageSimulationUpdate: MessageSimulationUpdate;
   MessageMarketUpdate: MessageMarketUpdate;
   MessageNewUserConnected: MessageNewUserConnected;
+  MessageChatMessageReceived: MessageChatMessageReceived;
 };
 
 export type MessageProcessor = {
