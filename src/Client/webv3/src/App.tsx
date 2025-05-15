@@ -1,19 +1,14 @@
 import { useGlobalStore } from "./store";
-import { Panel } from "./components/Panel";
+import { Panel, type PanelType } from "./components/Panel";
 import { useRef } from "react";
 import { OrderBookPanel } from "./components/OrderBookPanel";
-import { TraderInfoPanel } from "./components/TraderInfoPanel";
 import clsx from "clsx";
 
 let nextId = 1;
 
-type PanelType = "OrderBook" | "Chart" | "Depth" | "TradeBlotter" | "TraderInfo" | "Portfolio";
-
 function renderPanelContent(type: PanelType) {
   if (type === "OrderBook") {
     return <OrderBookPanel />;
-  } else if (type === "TraderInfo") {
-    return <TraderInfoPanel />;
   } else {
     return <div>Unknown panel: {type}</div>;
   }
@@ -46,17 +41,6 @@ function App() {
         { height: Infinity, width: Infinity },
         type
       );
-    } else if (type === "TraderInfo") {
-      createPanel(
-        id,
-        100,
-        100,
-        275,
-        200,
-        { height: 200, width: 275 },
-        { height: Infinity, width: Infinity },
-        type
-      );
     } else {
       throw new Error("Unknown panel type.");
     }
@@ -68,9 +52,6 @@ function App() {
       <div className='grow-0 h-8 border-b-1 z-10 flex flex-row gap-1 items-center pl-4 pr-4'>
         <button className='bg-amber-400 hover:cursor-pointer' onClick={() => addPanel("OrderBook")}>
           <span>Book Panel</span>
-        </button>
-        <button className='bg-blue-400 hover:cursor-pointer' onClick={() => addPanel("TraderInfo")}>
-          <span>Trader Info Panel</span>
         </button>
       </div>
       {/* Workspace */}
@@ -125,6 +106,20 @@ function App() {
                 <span className='relative inline-flex size-2 rounded-full bg-red-700'></span>
               </span>
             )}
+          </span>
+        </div>
+        <div>
+          <span className='relative inline-flex outline-1 px-1'>
+            <button className='cursor-pointer'>
+              <span>Scripting</span>
+            </button>
+          </span>
+        </div>
+        <div>
+          <span className='relative inline-flex outline-1 px-1'>
+            <button className='cursor-pointer'>
+              <span>Save Layout</span>
+            </button>
           </span>
         </div>
       </div>

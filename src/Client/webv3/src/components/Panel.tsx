@@ -6,9 +6,10 @@ export type PanelType =
   | "OrderBook"
   | "Chart"
   | "Depth"
-  | "TradeBlotter"
-  | "TraderInfo"
-  | "Portfolio";
+  | "Blotter"
+  | "Portfolio"
+  | "TenderOffer"
+  | "TenderAuction";
 
 interface PanelProps {
   id: string;

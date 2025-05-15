@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useGlobalStore } from "../store";
 import IntegerInput, { type IntegerInputRef } from "./IntegerInput";
 import "./OrderBookPanel.css";
@@ -15,13 +15,20 @@ export function OrderBookPanel() {
   const userIdMap = useGlobalStore((state) => state.user_id_to_username);
   const [selectedSecurity, setSelectedSecurity] = useState<string>(DEFAULT_SELECTION);
 
+  const [maxTradeVolume, setMaxTradeVolume] = useState(1);
+  const [decimalPlaces, setDecimalPlaces] = useState(2);
+  useEffect(() => {
+    setMaxTradeVolume(securityInfo[selectedSecurity]?.max_trade_volume ?? 1);
+    setDecimalPlaces(securityInfo[selectedSecurity]?.decimal_places ?? 2);
+  }, [securityInfo, selectedSecurity]);
+
   return (
     <div className='flex flex-col gap-2 h-full'>
       <div className='flex flex-row justify-between'>
         <select
           value={selectedSecurity}
           onChange={(e) => setSelectedSecurity(e.target.value)}
-          className='outline-1 w-20 select-none'
+          className='outline-1 w-22 select-none'
         >
           <option value={DEFAULT_SELECTION}>{DEFAULT_SELECTION}</option>
           {securities.map((el) => (
@@ -37,7 +44,7 @@ export function OrderBookPanel() {
               ref={volumeRef}
               isDisabled={selectedSecurity == DEFAULT_SELECTION}
               min={1}
-              max={securityInfo?.[selectedSecurity]?.max_trade_volume ?? 1}
+              max={maxTradeVolume}
             />
           </label>
           <label className='flex flex-row gap-0.5'>
@@ -51,58 +58,43 @@ export function OrderBookPanel() {
           </label>
         </div>
       </div>
-      <div className='flex-grow flex flex-row gap-2'>
-        <div className='w-1/2 outline-1 bg-gray-100'>
-          <table className='w-full'>
-            <thead className='tb-divider'>
-              <tr className='bg-gray-700 text-white sticky top-0'>
-                <th>
-                  <span>Trader</span>
-                </th>
-                <th>
-                  <span>Volume</span>
-                </th>
-                <th>
-                  <span>Price</span>
-                </th>
-              </tr>
-            </thead>
-            <tbody className='tb-divider'>
-              {orderBooks[selectedSecurity]?.bids?.map((bid) => (
-                <tr key={bid.order_id}>
-                  <td>{userIdMap[bid.user_id] ?? bid.user_id}</td>
-                  <td>{bid.volume}</td>
-                  <td>{bid.price}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+      <div className='flex flex-row gap-2 flex-grow flex-shrink overflow-hidden'>
+        <div className='w-1/2 border-1 flex flex-col h-full'>
+          <div className='grid grid-cols-3 bg-gray-700 text-white sticky top-0 text-sm font-bold'>
+            <div className='px-2 py-1'>Trader</div>
+            <div className='px-2 py-1 text-right'>Volume</div>
+            <div className='px-2 py-1 text-right'>Price</div>
+          </div>
+          <div className='overflow-y-scroll flex-1'>
+            {orderBooks[selectedSecurity]?.bids?.map((order) => (
+              <div key={order.order_id} className='grid grid-cols-3 text-sm border-b'>
+                <div className='px-2 py-1 truncate'>
+                  {userIdMap[order.user_id] ?? order.user_id}
+                </div>
+                <div className='px-2 py-1 text-right'>{order.volume}</div>
+                <div className='px-2 py-1 text-right'>{order.price.toFixed(decimalPlaces)}</div>
+              </div>
+            ))}
+          </div>
         </div>
-        <div className='w-1/2 outline-1 bg-gray-100'>
-          <table className='w-full border-collapse'>
-            <thead className='tb-divider'>
-              <tr className='bg-gray-700 text-white sticky top-0'>
-                <th>
-                  <span>Price</span>
-                </th>
-                <th>
-                  <span>Volume</span>
-                </th>
-                <th>
-                  <span>Trader</span>
-                </th>
-              </tr>
-            </thead>
-            <tbody className='tb-divider'>
-              {orderBooks[selectedSecurity]?.asks?.map((ask) => (
-                <tr key={ask.order_id}>
-                  <td>{ask.volume}</td>
-                  <td>{ask.price}</td>
-                  <td>{userIdMap[ask.user_id] ?? ask.user_id}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        <div className='w-1/2 border-1 flex flex-col h-full'>
+          <div className='grid grid-cols-3 bg-gray-700 text-white sticky top-0 text-sm font-bold'>
+            <div className='px-2 py-1 text-left'>Price</div>
+            <div className='px-2 py-1 text-left'>Volume</div>
+            <div className='px-2 py-1'>Trader</div>
+          </div>
+
+          <div className='overflow-y-scroll flex-1'>
+            {orderBooks[selectedSecurity]?.asks?.map((order) => (
+              <div key={order.order_id} className='grid grid-cols-3 text-sm border-b'>
+                <div className='px-2 py-1 text-left'>{order.price.toFixed(decimalPlaces)}</div>
+                <div className='px-2 py-1 text-left'>{order.volume}</div>
+                <div className='px-2 py-1 truncate'>
+                  {userIdMap[order.user_id] ?? order.user_id}
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
       </div>
     </div>

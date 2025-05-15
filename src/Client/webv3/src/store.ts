@@ -29,7 +29,7 @@ interface GlobalState extends MessageProcessor {
   is_initialized: boolean;
   tick: number;
   max_tick: number;
-  client_id: UserID;
+  user_id: UserID;
   simulation_state: SimulationState;
   all_securities: Ticker[];
   tradeable_securities: Ticker[];
@@ -67,7 +67,7 @@ export const useGlobalStore = create<GlobalState>()(
     is_initialized: false,
     tick: 0,
     max_tick: 0,
-    client_id: 0,
+    user_id: 0,
     simulation_state: "paused",
     all_securities: [],
     tradeable_securities: [],
@@ -87,12 +87,12 @@ export const useGlobalStore = create<GlobalState>()(
     processMessageLoginResponse: (msg) =>
       set((state) => {
         state.is_initialized = true;
-        state.client_id = msg.client_id;
+        state.user_id = msg.user_id;
       }),
     processMessageSimulationLoad: (msg) =>
       set((state) => {
         state.tick = msg.tick;
-        state.max_tick = msg.tick;
+        state.max_tick = msg.max_tick;
         state.simulation_state = msg.simulation_state;
         state.all_securities = msg.all_securities;
         state.tradeable_securities = msg.tradeable_securities;

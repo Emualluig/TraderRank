@@ -24,6 +24,7 @@ export interface Transaction {
 
 export interface SecurityInfo {
   security_id: number;
+  decimal_places: number;
   net_limit: number;
   gross_limit: number;
   max_trade_volume: number;
@@ -52,7 +53,7 @@ export interface MessageLoginRequest extends MessageBase {
 }
 export interface MessageLoginResponse extends MessageBase {
   type_: "login_response";
-  client_id: UserID;
+  user_id: UserID;
 }
 export interface MessageSimulationLoad extends MessageBase {
   type_: "simulation_load";
