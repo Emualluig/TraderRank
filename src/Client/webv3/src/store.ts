@@ -43,6 +43,10 @@ interface GlobalState extends MessageProcessor {
   chat: Array<{ user_id: UserID; text: string }>;
   chat_read: boolean[];
 
+  // Utilities
+  isFirstTick: () => boolean;
+  isLastTick: () => boolean;
+
   // Panel data
   topZ: number;
   bringToFront: (id: string) => void;
@@ -63,7 +67,7 @@ interface GlobalState extends MessageProcessor {
 }
 
 export const useGlobalStore = create<GlobalState>()(
-  immer((set) => ({
+  immer((set, get) => ({
     is_initialized: false,
     tick: 0,
     max_tick: 0,
@@ -80,6 +84,9 @@ export const useGlobalStore = create<GlobalState>()(
     news_read: [],
     chat: [],
     chat_read: [],
+
+    isFirstTick: () => get().tick <= 0,
+    isLastTick: () => get().tick >= get().max_tick,
 
     processMessageLoginRequest: () => {
       throw new Error("??");

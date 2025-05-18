@@ -298,7 +298,7 @@ async def step_loop():
                 for (client_id, socket) in client_id_to_socket.items():
                     user_id = client_id_to_user_id[client_id]
                     msg = MessageMarketUpdate(
-                        tick=result.tick,
+                        tick=result.tick - 1,
                         order_book_per_security=result.order_book_per_security,
                         portfolio={current_case.simulation.get_security_ticker(index): holdings for index, holdings in enumerate(result.portfolios[user_id])},
                         new_transactions=[],
@@ -312,6 +312,13 @@ async def step_loop():
                 pass
             except Exception as e:
                 print(f"[STEP LOOP] Encountered exception: {e}") 
+        
+        tick = current_case.get_tick()
+        if (
+            999 <= tick <= 1001 or 0 <= tick <= 5
+        ):
+            await asyncio.sleep(10.0)
+            pass
         await asyncio.sleep(1.0/30.0)
 
 async def handle_client(websocket: websockets.WebSocketServerProtocol, path: str):
