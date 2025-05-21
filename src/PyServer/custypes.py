@@ -2,7 +2,7 @@ from dataclasses import dataclass
 import dataclasses
 from enum import Enum
 import json
-from typing import List, Union
+from typing import Generic, List, Tuple, TypeVar, Union
 
 class EnhancedJSONEncoder(json.JSONEncoder):
     def default(self, o):
@@ -12,6 +12,13 @@ class EnhancedJSONEncoder(json.JSONEncoder):
             return o.value
         return super().default(o)
 
+T = TypeVar('T')
+@dataclass
+class BidAskStruct(Generic[T]):
+    bid: T
+    ask: T
+    pass
+
 @dataclass
 class LimitOrder:
     order_id: int
@@ -20,9 +27,8 @@ class LimitOrder:
     volume: float
 
 @dataclass
-class OrderBook:
-    bids: List[LimitOrder]
-    asks: List[LimitOrder]
+class OrderBook(BidAskStruct[List[LimitOrder]]):
+    pass
 
 @dataclass
 class Transaction:
@@ -94,11 +100,25 @@ class MessageSimulationUpdate(MessageBase):
     type_: MessageType = MessageType.simulation_update
 
 @dataclass
+class SubmittedOrders(BidAskStruct[List[LimitOrder]]):
+    pass
+
+@dataclass
+class CancelledOrders(List[int]):
+    pass
+
+@dataclass
+class TransactedOrders(List[Tuple[int, float]]):
+    pass
+
+@dataclass
 class MessageMarketUpdate(MessageBase):
     tick: int
+    submitted_orders: dict[str, SubmittedOrders]
+    cancelled_orders: dict[str, CancelledOrders]
+    transacted_orders: dict[str, TransactedOrders]
     order_book_per_security: dict[str, OrderBook]
     portfolio: dict[str, float]
-    new_transactions: dict[str, List[Transaction]]
     new_news: List[News]
     type_: MessageType = MessageType.market_update
 

@@ -2,13 +2,14 @@ import { create } from "zustand";
 import { immer } from "zustand/middleware/immer";
 import type { PanelType } from "./components/Panel";
 import type {
+  LimitOrderExt,
   MessageProcessor,
   News,
   OrderBook,
+  OrderBookHighlight,
   SecurityInfo,
   SimulationState,
   Ticker,
-  Transaction,
   UserID,
   Username,
 } from "./types";
@@ -35,17 +36,14 @@ interface GlobalState extends MessageProcessor {
   tradeable_securities: Ticker[];
   security_info: Record<Ticker, SecurityInfo>;
   order_book_per_security: Record<Ticker, OrderBook>;
-  transactions: Record<Ticker, Transaction[]>;
+  order_book_per_security_color: Record<Ticker, OrderBookHighlight>;
   user_id_to_username: Record<UserID, Username>;
   portfolio: Record<Ticker, number>;
+  portfolio_delta: Record<Ticker, number>;
   news: News[];
   news_read: boolean[];
   chat: Array<{ user_id: UserID; text: string }>;
   chat_read: boolean[];
-
-  // Utilities
-  isFirstTick: () => boolean;
-  isLastTick: () => boolean;
 
   // Panel data
   topZ: number;
@@ -67,7 +65,7 @@ interface GlobalState extends MessageProcessor {
 }
 
 export const useGlobalStore = create<GlobalState>()(
-  immer((set, get) => ({
+  immer((set) => ({
     is_initialized: false,
     tick: 0,
     max_tick: 0,
@@ -77,16 +75,14 @@ export const useGlobalStore = create<GlobalState>()(
     tradeable_securities: [],
     security_info: {},
     order_book_per_security: {},
-    transactions: {},
+    order_book_per_security_color: {},
     user_id_to_username: {},
     portfolio: {},
+    portfolio_delta: {},
     news: [],
     news_read: [],
     chat: [],
     chat_read: [],
-
-    isFirstTick: () => get().tick <= 0,
-    isLastTick: () => get().tick >= get().max_tick,
 
     processMessageLoginRequest: () => {
       throw new Error("??");
@@ -105,9 +101,16 @@ export const useGlobalStore = create<GlobalState>()(
         state.tradeable_securities = msg.tradeable_securities;
         state.security_info = msg.security_info;
         state.order_book_per_security = msg.order_book_per_security;
-        state.transactions = msg.transactions;
+        state.order_book_per_security_color = structuredClone(msg.order_book_per_security);
         state.user_id_to_username = msg.user_id_to_username;
         state.portfolio = msg.portfolio;
+        state.portfolio_delta = Object.keys(msg.portfolio).reduce(
+          (prev, curr) => {
+            prev[curr] = 0;
+            return prev;
+          },
+          {} as Record<string, number>
+        );
         state.news = msg.news;
         state.news_read = msg.news.map(() => false);
         state.chat = [];
@@ -121,12 +124,147 @@ export const useGlobalStore = create<GlobalState>()(
     processMessageMarketUpdate: (msg) =>
       set((state) => {
         state.tick = msg.tick;
-        state.order_book_per_security = msg.order_book_per_security;
-        for (const [ticker, transactions] of Object.entries(msg.new_transactions)) {
-          const current_transactions = state.transactions[ticker];
-          for (const transaction of transactions) {
-            current_transactions.push(transaction);
-          }
+
+        const submitted_orders = msg.submitted_orders;
+        const cancelled_orders = msg.cancelled_orders;
+        const transacted_orders = msg.transacted_orders;
+
+        for (const ticker of state.all_securities) {
+          const previous_book = state.order_book_per_security[ticker];
+          const previous_book_color = state.order_book_per_security_color[ticker];
+          const local_submitted_orders = submitted_orders[ticker];
+          const local_cancelled_orders = new Set(cancelled_orders[ticker]);
+          const local_transacted_orders = new Map(transacted_orders[ticker]);
+
+          const current_book_bid = previous_book.bid
+            .concat(local_submitted_orders.bid)
+            .map((el) => {
+              const new_volume = local_transacted_orders.get(el.order_id);
+              if (new_volume !== undefined) {
+                el.volume = new_volume;
+              }
+              return el;
+            })
+            .filter((el) => !local_cancelled_orders.has(el.order_id))
+            .filter((el) => el.volume !== 0)
+            .sort((a, b) => {
+              const s = b.price - a.price;
+              if (s === 0) {
+                return a.order_id - b.order_id;
+              }
+              return s;
+            });
+
+          const current_book_bid_color = previous_book_color.bid
+            .filter((el) => el.color !== "red")
+            .map((el) => {
+              return {
+                ...el,
+                change: undefined,
+                color: undefined,
+                isNew: undefined,
+              } as LimitOrderExt;
+            })
+            .concat(
+              local_submitted_orders.bid.map((el) => {
+                return {
+                  ...el,
+                  color: "green",
+                  isNew: true,
+                } satisfies LimitOrderExt;
+              })
+            )
+            .map((el) => {
+              const transacted_volume = local_transacted_orders.get(el.order_id);
+              if (transacted_volume !== undefined) {
+                el.change = transacted_volume;
+                el.volume -= transacted_volume;
+                el.color = "red";
+              }
+              const is_cancelled = local_cancelled_orders.has(el.order_id);
+              if (is_cancelled) {
+                el.color = "red";
+              }
+              return el;
+            })
+            .sort((a, b) => {
+              const s = b.price - a.price;
+              if (s === 0) {
+                return a.order_id - b.order_id;
+              }
+              return s;
+            });
+
+          const current_book_ask = previous_book.ask
+            .map((el) => {
+              return el;
+            })
+            .concat(local_submitted_orders.ask)
+            .map((el) => {
+              const new_volume = local_transacted_orders.get(el.order_id);
+              if (new_volume !== undefined) {
+                el.volume = new_volume;
+              }
+              return el;
+            })
+            .filter((el) => !local_cancelled_orders.has(el.order_id))
+            .filter((el) => el.volume !== 0)
+            .sort((a, b) => {
+              const s = a.price - b.price;
+              if (s === 0) {
+                return a.order_id - b.order_id;
+              }
+              return s;
+            });
+
+          const current_book_ask_color = previous_book_color.ask
+            .filter((el) => el.color !== "red")
+            .map((el) => {
+              return {
+                ...el,
+                color: undefined,
+                change: undefined,
+                isNew: undefined,
+              } as LimitOrderExt;
+            })
+            .concat(
+              local_submitted_orders.ask.map((el) => {
+                return {
+                  ...el,
+                  color: "green",
+                  isNew: true,
+                } satisfies LimitOrderExt;
+              })
+            )
+            .map((el) => {
+              const transacted_volume = local_transacted_orders.get(el.order_id);
+              if (transacted_volume !== undefined) {
+                el.change = transacted_volume;
+                el.volume -= transacted_volume;
+                el.color = "red";
+              }
+              const is_cancelled = local_cancelled_orders.has(el.order_id);
+              if (is_cancelled) {
+                el.color = "red";
+              }
+              return el;
+            })
+            .sort((a, b) => {
+              const s = a.price - b.price;
+              if (s === 0) {
+                return a.order_id - b.order_id;
+              }
+              return s;
+            });
+
+          state.order_book_per_security[ticker].bid = current_book_bid;
+          state.order_book_per_security[ticker].ask = current_book_ask;
+          state.order_book_per_security_color[ticker].bid = current_book_bid_color;
+          state.order_book_per_security_color[ticker].ask = current_book_ask_color;
+        }
+
+        for (const [k, v] of Object.entries(msg.portfolio)) {
+          state.portfolio_delta[k] = v - state.portfolio[k];
         }
         state.portfolio = msg.portfolio;
         for (const news of msg.new_news) {

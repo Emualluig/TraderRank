@@ -3,16 +3,27 @@ export type UserID = number;
 export type OrderID = number;
 export type Username = string;
 
+interface BidAskStruct<T> {
+  bid: T;
+  ask: T;
+}
+
 export interface LimitOrder {
   order_id: OrderID;
   price: number;
   user_id: UserID;
   volume: number;
 }
-export interface OrderBook {
-  bids: LimitOrder[];
-  asks: LimitOrder[];
+
+export type ColorHighlight = "red" | "green";
+export interface LimitOrderExt extends LimitOrder {
+  color?: ColorHighlight;
+  change?: number;
+  isNew?: true;
 }
+export type OrderBookHighlight = BidAskStruct<LimitOrderExt[]>;
+
+export type OrderBook = BidAskStruct<LimitOrder[]>;
 
 export interface Transaction {
   tick: number;
@@ -34,7 +45,6 @@ export interface News {
   tick: number;
   text: string;
 }
-
 export type SimulationState = "running" | "paused";
 type MessageType =
   | "login_request"
@@ -74,12 +84,17 @@ export interface MessageSimulationUpdate extends MessageBase {
   simulation_state: SimulationState;
   tick: number;
 }
+export type SubmittedOrders = BidAskStruct<LimitOrder[]>;
+export type CancelledOrders = number[];
+export type TransactedOrders = [number, number][];
 export interface MessageMarketUpdate extends MessageBase {
   type_: "market_update";
   tick: number;
+  submitted_orders: Record<Ticker, SubmittedOrders>;
+  cancelled_orders: Record<Ticker, CancelledOrders>;
+  transacted_orders: Record<Ticker, TransactedOrders>;
   order_book_per_security: Record<Ticker, OrderBook>;
   portfolio: Record<Ticker, number>;
-  new_transactions: Record<Ticker, Transaction[]>;
   new_news: News[];
 }
 export interface MessageNewUserConnected extends MessageBase {
@@ -108,3 +123,7 @@ export type MessageProcessor = {
 };
 
 export type Message = MessageMap[keyof MessageMap];
+
+export interface PanelProps {
+  id: string;
+}

@@ -4,7 +4,7 @@ import json
 from typing import List, Tuple
 import websockets
 import python_modules.Server as Server
-from custypes import EnhancedJSONEncoder, LimitOrder, MessageLoginResponse, MessageMarketUpdate, MessageSimulationLoad, MessageSimulationUpdate, OrderBook, SecurityInfo, SimulationState
+from custypes import CancelledOrders, EnhancedJSONEncoder, LimitOrder, MessageLoginResponse, MessageMarketUpdate, MessageSimulationLoad, MessageSimulationUpdate, OrderBook, SecurityInfo, SimulationState, SubmittedOrders, TransactedOrders, Transaction
 import numpy as np
 
 def limit_order_convert(order: Server.LimitOrder) -> LimitOrder:
@@ -84,6 +84,9 @@ negative_fda_blurbs = [
 @dataclass
 class StepResult:
     tick: int
+    submitted_orders: dict[str, SubmittedOrders]
+    cancelled_orders: dict[str, CancelledOrders]
+    transacted_orders: dict[str, TransactedOrders]
     order_book_per_security: dict[str, OrderBook]
     portfolios: List[List[float]]
     pass
@@ -245,19 +248,38 @@ class SimulationBiotech:
         
         done = not results.has_next_step
         
+        w2: dict[str, SubmittedOrders] = {ticker: SubmittedOrders(bid=[], ask=[]) for ticker in results.v2_submitted_orders.keys()}
+        for (ticker, ob) in results.v2_submitted_orders.items():
+            for lo in ob:
+                if lo.side == Server.OrderSide.BID:
+                    w2[ticker].bid.append(LimitOrder(order_id=lo.order_id, price=lo.price, user_id=lo.user_id, volume=lo.volume))
+                    pass
+                elif lo.side == Server.OrderSide.ASK:
+                    w2[ticker].ask.append(LimitOrder(order_id=lo.order_id, price=lo.price, user_id=lo.user_id, volume=lo.volume))
+                    pass
+                pass
+            pass
+        
+        to = {ticker: 
+            list(pair.items())
+         for (ticker, pair) in results.v2_transacted_orders.items()}
+        
         ob = [
             (ticker, current_case.simulation.get_order_book(current_case.simulation.get_security_id(ticker)))
             for ticker in current_case.simulation.get_all_tickers()
         ]
         kob = {ticker: OrderBook(
-            bids=[limit_order_convert(l) for l in book[0]],
-            asks=[limit_order_convert(l) for l in book[1]] 
+            bid=[limit_order_convert(l) for l in book[0]],
+            ask=[limit_order_convert(l) for l in book[1]] 
         ) for ticker, book in ob}
         
         return done, StepResult(
             tick=self.simulation.get_tick(),
+            submitted_orders=w2,
+            cancelled_orders=results.v2_cancelled_orders,
+            transacted_orders=to,
             order_book_per_security=kob,
-            portfolios=results.portfolios
+            portfolios=results.portfolios,
         )
     
     def reset(self):
@@ -297,13 +319,51 @@ async def step_loop():
                 
                 for (client_id, socket) in client_id_to_socket.items():
                     user_id = client_id_to_user_id[client_id]
-                    msg = MessageMarketUpdate(
-                        tick=result.tick - 1,
-                        order_book_per_security=result.order_book_per_security,
-                        portfolio={current_case.simulation.get_security_ticker(index): holdings for index, holdings in enumerate(result.portfolios[user_id])},
-                        new_transactions=[],
-                        new_news=[]
-                    )
+                    
+                    if result.tick - 1 == 0:
+                        ob = [
+                            (ticker, current_case.simulation.get_order_book(current_case.simulation.get_security_id(ticker)))
+                            for ticker in current_case.simulation.get_all_tickers()
+                        ]
+                        kob = {ticker: OrderBook(
+                            bid=[limit_order_convert(l) for l in book[0]],
+                            ask=[limit_order_convert(l) for l in book[1]]    
+                        ) for ticker, book in ob}
+                        por = current_case.simulation.get_user_portfolio(user_id)
+                        pok = {ticker: por[current_case.simulation.get_security_id(ticker)] for ticker in current_case.simulation.get_all_tickers()}
+                        
+                        msg = MessageSimulationLoad(
+                            simulation_state=case_state,
+                            tick=result.tick - 1,
+                            max_tick=current_case.simulation.get_N(),
+                            all_securities=current_case.simulation.get_all_tickers(),
+                            tradeable_securities=current_case.simulation.get_all_tickers(),
+                            security_info={ticker: SecurityInfo(
+                                security_id=current_case.simulation.get_security_id(ticker),
+                                decimal_places=2,
+                                net_limit=100,
+                                gross_limit=100,
+                                max_trade_volume=20
+                            ) for ticker in current_case.simulation.get_all_tickers()},
+                            order_book_per_security=kob,
+                            transactions={ticker: [] for ticker in current_case.simulation.get_all_tickers()},
+                            user_id_to_username=current_case.simulation.get_user_id_to_username(),
+                            portfolio=pok,
+                            news=[]
+                        )
+                        pass
+                    else:
+                        msg = MessageMarketUpdate(
+                            tick=result.tick - 1,
+                            submitted_orders=result.submitted_orders,
+                            cancelled_orders=result.cancelled_orders,
+                            transacted_orders=result.transacted_orders,
+                            order_book_per_security=result.order_book_per_security,
+                            portfolio={current_case.simulation.get_security_ticker(index): holdings for index, holdings in enumerate(result.portfolios[user_id])},
+                            new_news=[],
+                        )
+                        pass
+                    
                     await socket.send(json.dumps(msg, cls=EnhancedJSONEncoder))
                     pass
                 
@@ -315,11 +375,12 @@ async def step_loop():
         
         tick = current_case.get_tick()
         if (
-            999 <= tick <= 1001 or 0 <= tick <= 5
+            False and
+            (999 <= tick <= 1001 or 0 <= tick <= 5)
         ):
             await asyncio.sleep(10.0)
             pass
-        await asyncio.sleep(1.0/30.0)
+        await asyncio.sleep(1.0/4.0)
 
 async def handle_client(websocket: websockets.WebSocketServerProtocol, path: str):
     client_id = id(websocket)
@@ -337,8 +398,8 @@ async def handle_client(websocket: websockets.WebSocketServerProtocol, path: str
             for ticker in current_case.simulation.get_all_tickers()
         ]
         kob = {ticker: OrderBook(
-            bids=[limit_order_convert(l) for l in book[0]],
-            asks=[limit_order_convert(l) for l in book[1]]    
+            bid=[limit_order_convert(l) for l in book[0]],
+            ask=[limit_order_convert(l) for l in book[1]]    
         ) for ticker, book in ob}
         por = current_case.simulation.get_user_portfolio(user_id)
         pok = {ticker: por[current_case.simulation.get_security_id(ticker)] for ticker in current_case.simulation.get_all_tickers()}
@@ -357,7 +418,7 @@ async def handle_client(websocket: websockets.WebSocketServerProtocol, path: str
                 max_trade_volume=20
             ) for ticker in current_case.simulation.get_all_tickers()},
             order_book_per_security=kob,
-            transactions=[],
+            transactions={ticker: [] for ticker in current_case.simulation.get_all_tickers()},
             user_id_to_username=current_case.simulation.get_user_id_to_username(),
             portfolio=pok,
             news=[]

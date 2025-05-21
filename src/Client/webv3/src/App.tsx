@@ -2,6 +2,7 @@ import { useGlobalStore } from "./store";
 import { Panel, type PanelType } from "./components/Panel";
 import { useRef } from "react";
 import { OrderBookPanel } from "./components/OrderBookPanel";
+import { PortfolioPanel } from "./components/PortfolioPanel";
 import clsx from "clsx";
 
 let nextId = 1;
@@ -9,6 +10,8 @@ let nextId = 1;
 function renderPanelContent(type: PanelType) {
   if (type === "OrderBook") {
     return <OrderBookPanel />;
+  } else if (type === "Portfolio") {
+    return <PortfolioPanel />;
   } else {
     return <div>Unknown panel: {type}</div>;
   }
@@ -41,6 +44,17 @@ function App() {
         { height: Infinity, width: Infinity },
         type
       );
+    } else if (type === "Portfolio") {
+      createPanel(
+        id,
+        100,
+        100,
+        325,
+        250,
+        { height: 250, width: 325 },
+        { height: Infinity, width: Infinity },
+        type
+      );
     } else {
       throw new Error("Unknown panel type.");
     }
@@ -52,6 +66,9 @@ function App() {
       <div className='grow-0 h-8 border-b-1 z-10 flex flex-row gap-1 items-center pl-4 pr-4'>
         <button className='bg-amber-400 hover:cursor-pointer' onClick={() => addPanel("OrderBook")}>
           <span>Book Panel</span>
+        </button>
+        <button className='bg-amber-400 hover:cursor-pointer' onClick={() => addPanel("Portfolio")}>
+          <span>Portfolio Panel</span>
         </button>
       </div>
       {/* Workspace */}

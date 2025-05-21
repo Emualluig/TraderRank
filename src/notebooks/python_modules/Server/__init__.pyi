@@ -330,6 +330,7 @@ class SimulationStepResult:
     has_next_step: bool
     order_book_per_security: dict[str, tuple[list[LimitOrder], list[LimitOrder]]]
     transactions: dict[str, list[Transaction]]
+    v2_submitted_orders: dict[str, list[LimitOrder]]
     @property
     def cancelled_orders(self) -> dict[str, set[int]]:
         ...
@@ -372,12 +373,30 @@ class SimulationStepResult:
     @user_id_to_username_map.setter
     def user_id_to_username_map(self, arg0: dict[typing.SupportsInt, str]) -> None:
         ...
+    @property
+    def v2_cancelled_orders(self) -> dict[str, list[int]]:
+        ...
+    @v2_cancelled_orders.setter
+    def v2_cancelled_orders(self, arg0: dict[str, list[typing.SupportsInt]]) -> None:
+        ...
+    @property
+    def v2_transacted_orders(self) -> dict[str, dict[int, float]]:
+        ...
+    @v2_transacted_orders.setter
+    def v2_transacted_orders(self, arg0: dict[str, dict[typing.SupportsInt, typing.SupportsFloat]]) -> None:
+        ...
 class Transaction:
     @property
     def buyer_id(self) -> int:
         ...
     @buyer_id.setter
     def buyer_id(self, arg0: typing.SupportsInt) -> None:
+        ...
+    @property
+    def buyer_order_id(self) -> int:
+        ...
+    @buyer_order_id.setter
+    def buyer_order_id(self, arg0: typing.SupportsInt) -> None:
         ...
     @property
     def price(self) -> float:
@@ -390,6 +409,12 @@ class Transaction:
         ...
     @seller_id.setter
     def seller_id(self, arg0: typing.SupportsInt) -> None:
+        ...
+    @property
+    def seller_order_id(self) -> int:
+        ...
+    @seller_order_id.setter
+    def seller_order_id(self, arg0: typing.SupportsInt) -> None:
         ...
     @property
     def volume(self) -> float:

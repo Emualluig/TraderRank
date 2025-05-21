@@ -218,6 +218,8 @@ struct Transaction {
 	float volume;
 	UserID buyer_id;
 	UserID seller_id;
+	OrderID buyer_order_id;
+	OrderID seller_order_id;
 };
 
 struct SimulationStepResult {
@@ -231,6 +233,9 @@ struct SimulationStepResult {
 	std::map<UserID, Username> user_id_to_username_map;
 	uint32_t current_step;
 	bool has_next_step;
+	std::map<SecurityTicker, std::vector<LimitOrder>> v2_submitted_orders;
+	std::map<SecurityTicker, std::vector<OrderID>> v2_cancelled_orders;
+	std::map<SecurityTicker, std::map<OrderID, float>> v2_transacted_orders;
 };
 
 class ISecurity;
@@ -698,6 +703,10 @@ protected:
 		std::map<SecurityTicker, std::set<OrderID>> cancelled_orders = {};
 		std::map<SecurityTicker, std::vector<Transaction>> transactions = {};
 
+		std::map<SecurityTicker, std::vector<LimitOrder>> v2_submitted_orders = {};
+		std::map<SecurityTicker, std::vector<OrderID>> v2_cancelled_orders = {};
+		std::map<SecurityTicker, std::map<OrderID, float>> v2_transacted_orders = {};
+
 		auto& securities = get_securities();
 		// Here would the command queues normally be
 		for (SecurityID security_id = 0; security_id < get_securities_count(); security_id++) {
@@ -710,6 +719,10 @@ protected:
 			auto local_fully_transacted_orders = std::set<OrderID>();
 			auto local_cancelled_orders = std::set<OrderID>();
 			auto local_transactions = std::vector<Transaction>();
+
+			auto local_v2_submitted_orders = std::vector<LimitOrder>();
+			auto local_v2_cancelled_orders = std::vector<OrderID>();
+			auto local_v2_transacted_orders = std::map<OrderID, float>();
 
 			for (auto& variant_command : commands) {
 				auto index = variant_command.index();
@@ -725,6 +738,7 @@ protected:
 					LimitOrder& order = std::get<0>(variant_command);
 					// Insert the order
 					order_book.insert_order(order);
+					local_v2_submitted_orders.push_back(order);
 
 					// The order book is now potentially crossed, we must resolve it
 					// additionally, if it was crossed, it is due to the added order, by our invariants
@@ -768,10 +782,13 @@ protected:
 								local_partially_transacted_orders[top_ask_id] = remaining_ask_volume;
 							}
 
+							local_v2_transacted_orders[top_bid_id] += transacted_volume;
+							local_v2_transacted_orders[top_ask_id] += transacted_volume;
+
 							// Perform custom security trade resolution
 							// Must often this is used to simply modify security and cash accounts
 							security_class->on_trade_executed(*this, user_portfolio_manager, buyer_id, seller_id, transacted_price, transacted_volume);
-							local_transactions.push_back(Transaction{ .price = transacted_price, .volume = transacted_volume, .buyer_id = buyer_id, .seller_id = seller_id });
+							local_transactions.push_back(Transaction{ .price = transacted_price, .volume = transacted_volume, .buyer_id = buyer_id, .seller_id = seller_id, .buyer_order_id = top_bid_id, .seller_order_id = top_ask_id });
 						}
 						else {
 							break;
@@ -790,6 +807,7 @@ protected:
 					auto was_cancelled = order_book.cancel_order(order);
 					if (was_cancelled) {
 						local_cancelled_orders.insert(order.order_id);
+						local_v2_cancelled_orders.push_back(order.order_id);
 					}
 				}
 				else if (index == 2) {
@@ -820,6 +838,7 @@ protected:
 								top_ask.volume = remaining_ask_volume;
 								local_partially_transacted_orders[top_ask_order_id] = remaining_ask_volume;
 							}
+							local_v2_transacted_orders[top_ask_order_id] += transacted_volume;
 
 							security_class->on_trade_executed(*this, user_portfolio_manager, order_user_id, top_ask_user_id, transacted_price, transacted_volume);
 							local_transactions.push_back(Transaction{ .price = transacted_price, .volume = transacted_volume, .buyer_id = order_user_id, .seller_id = top_ask_user_id });
@@ -846,6 +865,7 @@ protected:
 								top_bid.volume = remaining_bid_volume;
 								local_partially_transacted_orders[top_bid_order_id] = remaining_bid_volume;
 							}
+							local_v2_transacted_orders[top_bid_order_id] += transacted_volume;
 
 							security_class->on_trade_executed(*this, user_portfolio_manager, top_bid_user_id, order_user_id, transacted_price, transacted_volume);
 							local_transactions.push_back(Transaction{ .price = transacted_price, .volume = transacted_volume, .buyer_id = top_bid_user_id, .seller_id = order_user_id });
@@ -869,6 +889,10 @@ protected:
 			fully_transacted_orders.emplace(ticker, local_fully_transacted_orders);
 			cancelled_orders.emplace(ticker, local_cancelled_orders);
 			transactions.emplace(ticker, local_transactions);
+
+			v2_submitted_orders.emplace(ticker, local_v2_submitted_orders);
+			v2_cancelled_orders.emplace(ticker, local_v2_cancelled_orders);
+			v2_transacted_orders.emplace(ticker, local_v2_transacted_orders);
 
 			// Reset the submitted_order[security_id] vector
 			commands.clear();
@@ -903,7 +927,10 @@ protected:
 			.portfolios = user_portfolio_manager->get_portfolio_table(),
 			.user_id_to_username_map = get_user_id_to_username(),
 			.current_step = get_tick() - 1,
-			.has_next_step = get_tick() <= get_N()
+			.has_next_step = get_tick() <= get_N(),
+			.v2_submitted_orders = v2_submitted_orders,
+			.v2_cancelled_orders = v2_cancelled_orders,
+			.v2_transacted_orders = v2_transacted_orders
 		};
 	};
 public:
@@ -1356,7 +1383,9 @@ PYBIND11_MODULE(Server, m) {
 		.def_readwrite("price", &Transaction::price)
 		.def_readwrite("volume", &Transaction::volume)
 		.def_readwrite("buyer_id", &Transaction::buyer_id)
-		.def_readwrite("seller_id", &Transaction::seller_id);
+		.def_readwrite("seller_id", &Transaction::seller_id)
+		.def_readwrite("buyer_order_id", &Transaction::buyer_order_id)
+		.def_readwrite("seller_order_id", &Transaction::seller_order_id);
 
 	py::bind_vector<std::vector<LimitOrder>>(m, "LimitOrderList");
 	py::bind_map<std::map<float, float>>(m, "PriceDepthMap");
@@ -1371,7 +1400,10 @@ PYBIND11_MODULE(Server, m) {
 		.def_readwrite("portfolios", &SimulationStepResult::portfolios)
 		.def_readwrite("user_id_to_username_map", &SimulationStepResult::user_id_to_username_map)
 		.def_readwrite("current_step", &SimulationStepResult::current_step)
-		.def_readwrite("has_next_step", &SimulationStepResult::has_next_step);
+		.def_readwrite("has_next_step", &SimulationStepResult::has_next_step)
+		.def_readwrite("v2_submitted_orders", &SimulationStepResult::v2_submitted_orders)
+		.def_readwrite("v2_cancelled_orders", &SimulationStepResult::v2_cancelled_orders)
+		.def_readwrite("v2_transacted_orders", &SimulationStepResult::v2_transacted_orders);
 
 	py::class_<ISecurity, PyISecurity, std::shared_ptr<ISecurity>>(m, "ISecurity")
 		.def(py::init<>())
