@@ -119,6 +119,7 @@ class MessageMarketUpdate(MessageBase):
     transacted_orders: dict[str, TransactedOrders]
     order_book_per_security: dict[str, OrderBook]
     portfolio: dict[str, float]
+    new_transactions: dict[str, Transaction]
     new_news: List[News]
     type_: MessageType = MessageType.market_update
 

@@ -3,7 +3,7 @@ export type UserID = number;
 export type OrderID = number;
 export type Username = string;
 
-interface BidAskStruct<T> {
+export interface BidAskStruct<T> {
   bid: T;
   ask: T;
 }
@@ -95,6 +95,7 @@ export interface MessageMarketUpdate extends MessageBase {
   transacted_orders: Record<Ticker, TransactedOrders>;
   order_book_per_security: Record<Ticker, OrderBook>;
   portfolio: Record<Ticker, number>;
+  new_transactions: Record<Ticker, Transaction[]>;
   new_news: News[];
 }
 export interface MessageNewUserConnected extends MessageBase {
@@ -124,6 +125,11 @@ export type MessageProcessor = {
 
 export type Message = MessageMap[keyof MessageMap];
 
-export interface PanelProps {
-  id: string;
+/*
+interface PortfolioRestriction {
+  name: string;
+  dependencies: Ticker[];
+  net_limit: number;
+  gross_limit: number;
 }
+*/

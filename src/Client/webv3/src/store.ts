@@ -2,6 +2,8 @@ import { create } from "zustand";
 import { immer } from "zustand/middleware/immer";
 import type { PanelType } from "./components/Panel";
 import type {
+  BidAskStruct,
+  LimitOrder,
   LimitOrderExt,
   MessageProcessor,
   News,
@@ -10,6 +12,7 @@ import type {
   SecurityInfo,
   SimulationState,
   Ticker,
+  Transaction,
   UserID,
   Username,
 } from "./types";
@@ -37,9 +40,12 @@ interface GlobalState extends MessageProcessor {
   security_info: Record<Ticker, SecurityInfo>;
   order_book_per_security: Record<Ticker, OrderBook>;
   order_book_per_security_color: Record<Ticker, OrderBookHighlight>;
+  previous_top_bid_ask: Record<Ticker, BidAskStruct<LimitOrder | null>>;
   user_id_to_username: Record<UserID, Username>;
   portfolio: Record<Ticker, number>;
   portfolio_delta: Record<Ticker, number>;
+  transactions: Record<Ticker, Transaction[]>;
+  new_transactions: Record<Ticker, Transaction[]>;
   news: News[];
   news_read: boolean[];
   chat: Array<{ user_id: UserID; text: string }>;
@@ -76,9 +82,12 @@ export const useGlobalStore = create<GlobalState>()(
     security_info: {},
     order_book_per_security: {},
     order_book_per_security_color: {},
+    previous_top_bid_ask: {},
     user_id_to_username: {},
     portfolio: {},
     portfolio_delta: {},
+    transactions: {},
+    new_transactions: {},
     news: [],
     news_read: [],
     chat: [],
@@ -102,6 +111,18 @@ export const useGlobalStore = create<GlobalState>()(
         state.security_info = msg.security_info;
         state.order_book_per_security = msg.order_book_per_security;
         state.order_book_per_security_color = structuredClone(msg.order_book_per_security);
+        state.previous_top_bid_ask = Object.entries(msg.order_book_per_security).reduce(
+          (prev, curr) => {
+            const ticker = curr[0];
+            const book = curr[1];
+            prev[ticker] = {
+              bid: book.bid.at(0) ?? null,
+              ask: book.ask.at(0) ?? null,
+            };
+            return prev;
+          },
+          {} as Record<Ticker, BidAskStruct<LimitOrder | null>>
+        );
         state.user_id_to_username = msg.user_id_to_username;
         state.portfolio = msg.portfolio;
         state.portfolio_delta = Object.keys(msg.portfolio).reduce(
@@ -111,6 +132,8 @@ export const useGlobalStore = create<GlobalState>()(
           },
           {} as Record<string, number>
         );
+        state.transactions = msg.transactions;
+        state.new_transactions = structuredClone(msg.transactions);
         state.news = msg.news;
         state.news_read = msg.news.map(() => false);
         state.chat = [];
@@ -130,30 +153,18 @@ export const useGlobalStore = create<GlobalState>()(
         const transacted_orders = msg.transacted_orders;
 
         for (const ticker of state.all_securities) {
-          const previous_book = state.order_book_per_security[ticker];
+          state.previous_top_bid_ask[ticker].bid =
+            state.order_book_per_security[ticker].bid.at(0) ?? null;
+          state.previous_top_bid_ask[ticker].ask =
+            state.order_book_per_security[ticker].ask.at(0) ?? null;
+        }
+
+        for (const ticker of state.all_securities) {
+          // const previous_book = state.order_book_per_security[ticker];
           const previous_book_color = state.order_book_per_security_color[ticker];
           const local_submitted_orders = submitted_orders[ticker];
           const local_cancelled_orders = new Set(cancelled_orders[ticker]);
           const local_transacted_orders = new Map(transacted_orders[ticker]);
-
-          const current_book_bid = previous_book.bid
-            .concat(local_submitted_orders.bid)
-            .map((el) => {
-              const new_volume = local_transacted_orders.get(el.order_id);
-              if (new_volume !== undefined) {
-                el.volume = new_volume;
-              }
-              return el;
-            })
-            .filter((el) => !local_cancelled_orders.has(el.order_id))
-            .filter((el) => el.volume !== 0)
-            .sort((a, b) => {
-              const s = b.price - a.price;
-              if (s === 0) {
-                return a.order_id - b.order_id;
-              }
-              return s;
-            });
 
           const current_book_bid_color = previous_book_color.bid
             .filter((el) => el.color !== "red")
@@ -189,28 +200,6 @@ export const useGlobalStore = create<GlobalState>()(
             })
             .sort((a, b) => {
               const s = b.price - a.price;
-              if (s === 0) {
-                return a.order_id - b.order_id;
-              }
-              return s;
-            });
-
-          const current_book_ask = previous_book.ask
-            .map((el) => {
-              return el;
-            })
-            .concat(local_submitted_orders.ask)
-            .map((el) => {
-              const new_volume = local_transacted_orders.get(el.order_id);
-              if (new_volume !== undefined) {
-                el.volume = new_volume;
-              }
-              return el;
-            })
-            .filter((el) => !local_cancelled_orders.has(el.order_id))
-            .filter((el) => el.volume !== 0)
-            .sort((a, b) => {
-              const s = a.price - b.price;
               if (s === 0) {
                 return a.order_id - b.order_id;
               }
@@ -257,8 +246,8 @@ export const useGlobalStore = create<GlobalState>()(
               return s;
             });
 
-          state.order_book_per_security[ticker].bid = current_book_bid;
-          state.order_book_per_security[ticker].ask = current_book_ask;
+          state.order_book_per_security[ticker].bid = msg.order_book_per_security[ticker].bid;
+          state.order_book_per_security[ticker].ask = msg.order_book_per_security[ticker].ask;
           state.order_book_per_security_color[ticker].bid = current_book_bid_color;
           state.order_book_per_security_color[ticker].ask = current_book_ask_color;
         }
@@ -267,6 +256,13 @@ export const useGlobalStore = create<GlobalState>()(
           state.portfolio_delta[k] = v - state.portfolio[k];
         }
         state.portfolio = msg.portfolio;
+
+        for (const ticker of state.all_securities) {
+          for (const transaction of msg.new_transactions[ticker]) {
+            state.transactions[ticker].push(transaction);
+          }
+        }
+
         for (const news of msg.new_news) {
           state.news.push(news);
           state.news_read.push(false);

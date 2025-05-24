@@ -89,6 +89,7 @@ class StepResult:
     transacted_orders: dict[str, TransactedOrders]
     order_book_per_security: dict[str, OrderBook]
     portfolios: List[List[float]]
+    new_transactions: dict[str, List[Transaction]]
     pass
 
 class SimulationBiotech:
@@ -280,6 +281,15 @@ class SimulationBiotech:
             transacted_orders=to,
             order_book_per_security=kob,
             portfolios=results.portfolios,
+            new_transactions={ticker: [
+                Transaction(
+                    tick=self.simulation.get_tick(),
+                    price=x.price,
+                    volume=x.volume,
+                    seller_id=x.seller_id,
+                    buyer_id=x.buyer_id
+                ) for x in transactions
+            ] for ticker, transactions in results.transactions.items()}
         )
     
     def reset(self):
@@ -312,6 +322,7 @@ client_id_to_socket: dict[int, websockets.WebSocketServerProtocol] = {}
 client_id_to_user_id: dict[int, int] = {}
 
 async def step_loop():
+    transactions: dict[str, List[Transaction]] = {}
     while True:
         if case_state == SimulationState.running:
             try:
@@ -331,6 +342,7 @@ async def step_loop():
                         ) for ticker, book in ob}
                         por = current_case.simulation.get_user_portfolio(user_id)
                         pok = {ticker: por[current_case.simulation.get_security_id(ticker)] for ticker in current_case.simulation.get_all_tickers()}
+                        transactions = result.new_transactions
                         
                         msg = MessageSimulationLoad(
                             simulation_state=case_state,
@@ -346,13 +358,22 @@ async def step_loop():
                                 max_trade_volume=20
                             ) for ticker in current_case.simulation.get_all_tickers()},
                             order_book_per_security=kob,
-                            transactions={ticker: [] for ticker in current_case.simulation.get_all_tickers()},
+                            transactions=transactions,
                             user_id_to_username=current_case.simulation.get_user_id_to_username(),
                             portfolio=pok,
                             news=[]
                         )
                         pass
                     else:
+                        for ticker, new_transactions in result.new_transactions.items():
+                            if ticker not in transactions:
+                                transactions[ticker] = []
+                                pass
+                            for transaction in new_transactions:
+                                transactions[ticker].append(new_transactions)
+                                pass
+                            pass
+                        
                         msg = MessageMarketUpdate(
                             tick=result.tick - 1,
                             submitted_orders=result.submitted_orders,
@@ -360,6 +381,7 @@ async def step_loop():
                             transacted_orders=result.transacted_orders,
                             order_book_per_security=result.order_book_per_security,
                             portfolio={current_case.simulation.get_security_ticker(index): holdings for index, holdings in enumerate(result.portfolios[user_id])},
+                            new_transactions=result.new_transactions,
                             new_news=[],
                         )
                         pass
@@ -371,7 +393,9 @@ async def step_loop():
                     current_case.reset()
                 pass
             except Exception as e:
-                print(f"[STEP LOOP] Encountered exception: {e}") 
+                print(f"[STEP LOOP] Encountered exception: {e}")
+                print(e)
+                print(type(e))
         
         tick = current_case.get_tick()
         if (

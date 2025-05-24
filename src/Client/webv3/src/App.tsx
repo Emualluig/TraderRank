@@ -4,6 +4,8 @@ import { useRef } from "react";
 import { OrderBookPanel } from "./components/OrderBookPanel";
 import { PortfolioPanel } from "./components/PortfolioPanel";
 import clsx from "clsx";
+import { SecurityInfoPanel } from "./components/SecurityInfoPanel";
+import { TraderInfoPanel } from "./components/TraderInfoPanel";
 
 let nextId = 1;
 
@@ -12,6 +14,10 @@ function renderPanelContent(type: PanelType) {
     return <OrderBookPanel />;
   } else if (type === "Portfolio") {
     return <PortfolioPanel />;
+  } else if (type === "SecurityInfo") {
+    return <SecurityInfoPanel />;
+  } else if (type === "TraderInfo") {
+    return <TraderInfoPanel />;
   } else {
     return <div>Unknown panel: {type}</div>;
   }
@@ -55,6 +61,28 @@ function App() {
         { height: Infinity, width: Infinity },
         type
       );
+    } else if (type === "SecurityInfo") {
+      createPanel(
+        id,
+        100,
+        100,
+        325,
+        250,
+        { height: 250, width: 325 },
+        { height: Infinity, width: Infinity },
+        type
+      );
+    } else if (type === "TraderInfo") {
+      createPanel(
+        id,
+        100,
+        100,
+        325,
+        250,
+        { height: 250, width: 325 },
+        { height: Infinity, width: Infinity },
+        type
+      );
     } else {
       throw new Error("Unknown panel type.");
     }
@@ -69,6 +97,12 @@ function App() {
         </button>
         <button className='bg-amber-400 hover:cursor-pointer' onClick={() => addPanel("Portfolio")}>
           <span>Portfolio Panel</span>
+        </button>
+        <button
+          className='bg-amber-400 hover:cursor-pointer'
+          onClick={() => addPanel("SecurityInfo")}
+        >
+          <span>Security Info Panel</span>
         </button>
       </div>
       {/* Workspace */}

@@ -2,14 +2,7 @@ import { useEffect, useRef } from "react";
 import interact from "interactjs";
 import { useGlobalStore } from "../store";
 
-export type PanelType =
-  | "OrderBook"
-  | "Chart"
-  | "Depth"
-  | "Blotter"
-  | "Portfolio"
-  | "TenderOffer"
-  | "TenderAuction";
+export type PanelType = "OrderBook" | "Portfolio" | "SecurityInfo" | "TraderInfo";
 
 interface PanelProps {
   id: string;
