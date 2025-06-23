@@ -1393,7 +1393,7 @@ PYBIND11_MODULE(Server, m) {
 		.def("reset_user_portfolio", &IPortfolioManager::reset_user_portfolio, py::arg("user_id"))
 		.def("add_to_security", &IPortfolioManager::add_to_security, py::arg("user_id"), py::arg("security_1"), py::arg("addition_1"))
 		.def("multiply_to_security", &IPortfolioManager::multiply_to_security, py::arg("user_id"), py::arg("security_1"), py::arg("multiplier_1"))
-		.def("multiply_to_security_if_negative", &IPortfolioManager::multiply_to_security, py::arg("user_id"), py::arg("security_1"), py::arg("multiplier_1"))
+                .def("multiply_to_security_if_negative", &IPortfolioManager::multiply_to_security_if_negative, py::arg("user_id"), py::arg("security_1"), py::arg("multiplier_1"))
 		.def("add_to_two_securities", &IPortfolioManager::add_to_two_securities, py::arg("user_id"), py::arg("security_1"), py::arg("addition_1"), py::arg("security_2"), py::arg("addition_2"))
 		.def("multiply_and_add_1_to_2", &IPortfolioManager::multiply_and_add_1_to_2, py::arg("user_id"), py::arg("security_1"), py::arg("security_2"), py::arg("multiply"))
 		.def("multiply_and_add_1_to_2_and_set_1", &IPortfolioManager::multiply_and_add_1_to_2_and_set_1,
