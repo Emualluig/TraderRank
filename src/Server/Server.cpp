@@ -1,5 +1,7 @@
 ﻿// Server.cpp : Defines the entry point for the application.
 //
+#include "SingleThreadedTraderRank.hpp"
+
 #include <cstdint>
 #include <iostream>
 #include <algorithm>
@@ -1495,3 +1497,4 @@ PYBIND11_MODULE(Server, m) {
 			py::arg("currency"),
 			py::arg("dividend_function"));
 }
+

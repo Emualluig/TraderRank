@@ -69,6 +69,9 @@ An open source stock market simulator.
         - [ ] Hotkeys for fast order entry (market and limit orders) 
       - [ ] CLOB Latter View
         - [ ] Hotkeys for fast order entry (market and limit orders) 
+      - [ ] CLOB Iceberg View (two colored regions style)
+      - [ ] CLOB Canyon View (similar to Polymarket)
+         - [ ] Hotkeys for fast order entry (market and limit orders)
       - [ ] Security Charting:
         - [ ] Candlestick View
         - [ ] Market Bidpoint View

@@ -167,7 +167,7 @@ export const useGlobalStore = create<GlobalState>()(
           const local_transacted_orders = new Map(transacted_orders[ticker]);
 
           const current_book_bid_color = previous_book_color.bid
-            .filter((el) => el.color !== "red")
+            .filter((el) => el.color !== "red" && el.volume !== 0)
             .map((el) => {
               return {
                 ...el,
@@ -207,7 +207,7 @@ export const useGlobalStore = create<GlobalState>()(
             });
 
           const current_book_ask_color = previous_book_color.ask
-            .filter((el) => el.color !== "red")
+            .filter((el) => el.color !== "red" && el.volume !== 0)
             .map((el) => {
               return {
                 ...el,
