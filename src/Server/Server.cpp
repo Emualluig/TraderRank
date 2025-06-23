@@ -925,9 +925,10 @@ public:
 			throw std::runtime_error(fmt::format("Cannot submit a limit order with non-positive price, received: `{}`.", price));
 		}
 		auto order_queue_lock = std::unique_lock(order_queue_mutex);
-		auto order_id = order_id_counter++;
-		submitted_orders.at(security_id).push_back(LimitOrder { .user_id = user_id, .order_id = order_id_counter, .side = side, .price = price, .volume = volume });
-		return order_id;
+                auto order_id = order_id_counter++;
+                submitted_orders.at(security_id).push_back(
+                        LimitOrder{ .user_id = user_id, .order_id = order_id, .side = side, .price = price, .volume = volume });
+                return order_id;
 	};
 	void submit_cancel_order(UserID user_id, SecurityID security_id, OrderID order_id) override {
 		if (user_id >= get_user_count()) {
@@ -988,9 +989,10 @@ public:
 			throw std::runtime_error(fmt::format("Cannot submit a limit order with non-positive volume, received: `{}`.", volume));
 		}
 		auto order_queue_lock = std::unique_lock(order_queue_mutex);
-		auto order_id = order_id_counter++;
-		submitted_orders.at(security_id).push_back(MarketOrder{ .user_id = user_id, .order_id = order_id_counter, .action = action, .volume = volume });
-		return order_id;
+                auto order_id = order_id_counter++;
+                submitted_orders.at(security_id).push_back(
+                        MarketOrder{ .user_id = user_id, .order_id = order_id, .action = action, .volume = volume });
+                return order_id;
 	}
 };
 
