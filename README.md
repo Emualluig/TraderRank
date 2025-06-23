@@ -69,9 +69,8 @@ An open source stock market simulator.
         - [ ] Hotkeys for fast order entry (market and limit orders) 
       - [ ] CLOB Latter View
         - [ ] Hotkeys for fast order entry (market and limit orders) 
-      - [ ] CLOB Iceberg View (two colored regions style)
-      - [ ] CLOB Canyon View (similar to Polymarket)
-         - [ ] Hotkeys for fast order entry (market and limit orders)
+      - [ ] CLOB Iceberg/Canyon View (two colored regions style)
+        - Cumulative depth of bids on the left and depth of asks on right, with high increasing farther from the spread
       - [ ] Security Charting:
         - [ ] Candlestick View
         - [ ] Market Bidpoint View
@@ -86,6 +85,14 @@ An open source stock market simulator.
           - [ ] Exponential Moving Average
       - [ ] P&L Chart
       - [ ] Portfolio View
+          - [ ] Position
+          - [ ] Cost
+          - [ ] VWAP
+          - [ ] Net Liquidation Value
+          - [ ] Realized PNL
+          - [ ] Unrealized PNL
+          - [ ] Behavior: Can expand/shrink columns
+          - [ ] Behavior: Can right click and see dropdown to show/hide columns  
       - [ ] Transaction Log
       - [ ] Order Entry
       - [ ] Kill All Button (kills all open limit orders)
